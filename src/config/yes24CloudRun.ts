@@ -7,5 +7,5 @@
  * 둘 다 비우면 빌드 시 주입한 `VITE_YES24_API_URL` / `VITE_YES24_API_KEY` 를 사용합니다(GitHub Actions 등).
  * 공개 저장소라면 URL만 여기 두고, API 키는 Actions Secret 으로만 넣는 편이 안전합니다.
  */
-export const YES24_CLOUD_RUN_BASE_URL = ""; // 예: "https://서비스이름-xxxxx-xx.a.run.app" (끝 / 없음)
+export const YES24_CLOUD_RUN_BASE_URL = "https://hanuri-report-364392170079.asia-northeast3.run.app"; // 예: "https://서비스이름-xxxxx-xx.a.run.app" (끝 / 없음)
 export const YES24_CLOUD_RUN_API_KEY = "digitaldaesunghanuribookcrawling"; // Cloud Run 환경변수 YES24_API_SECRET 과 동일한 문자열
