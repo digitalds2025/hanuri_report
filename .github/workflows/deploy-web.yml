@@ -1,7 +1,8 @@
 # GitHub Actions + GitHub Pages (Vercel 없음)
 # 저장소 Settings → Pages → Build and deployment: Source = GitHub Actions
 # Secrets: VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_GEMINI_API_KEY
-# 선택: VITE_GEMINI_MODEL, VITE_SUPABASE_STORAGE_WRITING_BUCKET
+# 선택: VITE_GEMINI_MODEL, VITE_SUPABASE_STORAGE_WRITING_BUCKET,
+#       VITE_YES24_API_URL, VITE_YES24_API_KEY (Cloud Run YES24 프록시 연동 시)
 
 name: Deploy web to GitHub Pages
 
@@ -52,6 +53,8 @@ jobs:
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
           VITE_GEMINI_MODEL: ${{ secrets.VITE_GEMINI_MODEL }}
           VITE_SUPABASE_STORAGE_WRITING_BUCKET: ${{ secrets.VITE_SUPABASE_STORAGE_WRITING_BUCKET }}
+          VITE_YES24_API_URL: ${{ secrets.VITE_YES24_API_URL }}
+          VITE_YES24_API_KEY: ${{ secrets.VITE_YES24_API_KEY }}
 
       - name: SPA fallback (client-side routes on refresh)
         run: cp dist/index.html dist/404.html

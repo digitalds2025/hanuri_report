@@ -23,7 +23,7 @@ import {
   refreshMockBookAiFromDb,
   searchBooksByTitleSubstring,
 } from "../lib/fetchBookByTitle";
-import { localSaveMonthlyReport, localYes24SearchBook } from "../lib/localStoreApi";
+import { isYes24SearchAvailable, localSaveMonthlyReport, localYes24SearchBook } from "../lib/localStoreApi";
 import { bookUpsertInputFromYes24, persistBookUpsertRow } from "../lib/persistBookUpsert";
 import { pickStrengthWeaknessPointsForReport } from "../lib/pillarStrengthWeakness";
 import { stripAiPlainText } from "../lib/reportPlainText";
@@ -332,9 +332,9 @@ export function MonthlyReportNewPage() {
   }
 
   async function runYes24RegisterBook() {
-    if (!import.meta.env.DEV) {
+    if (!isYes24SearchAvailable()) {
       setBookSearchError(
-        "YES24 자동 등록은 브라우저만으로는 불가능합니다. GitHub Pages 등 배포본에는 Playwright용 `/api/local` 서버가 없습니다. 로컬에서 `npm run dev`로 등록하거나, 이후 Cloud Run 등 백엔드 API를 붙여 주세요.",
+        "이 사이트에서는 YES24 자동 등록을 쓸 수 없어요. 로컬에서는 `npm run dev`로 쓸 수 있고, 온라인에서는 관리자가 Cloud Run 연동을 켜야 해요.",
       );
       return;
     }
@@ -1060,7 +1060,7 @@ export function MonthlyReportNewPage() {
                         />
                       </label>
                     </div>
-                    {import.meta.env.DEV ? (
+                    {isYes24SearchAvailable() ? (
                       <button
                         type="button"
                         className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
@@ -1071,9 +1071,8 @@ export function MonthlyReportNewPage() {
                       </button>
                     ) : (
                       <p className="text-xs leading-relaxed text-amber-900">
-                        <strong>배포본(GitHub Pages 등)</strong>에서는 YES24 등록을 사용할 수 없습니다. YES24는{" "}
-                        <code className="rounded bg-white/80 px-0.5">npm run dev</code>일 때만 로컬 Vite 서버가
-                        Playwright로 처리합니다. 웹에서 쓰려면 별도 서버(예: Cloud Run)가 필요합니다.
+                        YES24 자동 등록은 이 배포에 연결되어 있지 않아요. 로컬에서는{" "}
+                        <code className="rounded bg-white/80 px-0.5">npm run dev</code>로 사용할 수 있어요.
                       </p>
                     )}
                   </div>

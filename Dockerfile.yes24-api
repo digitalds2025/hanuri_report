@@ -1,0 +1,19 @@
+# 빌드 컨텍스트는 반드시 저장소 루트(.) 여야 합니다.
+# 로컬: docker build -f Dockerfile.yes24-api -t yes24-api:local .
+# Cloud Run 콘솔 «저장소 연결» 시 소스 위치에 이 파일명을 지정하면 컨텍스트가 루트가 됩니다.
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy
+
+ENV NODE_ENV=production
+ENV YES24_FORCE_HEADLESS=1
+ENV PORT=8080
+
+# server.ts 가 ../../yes24BookScrape.ts 를 가리키므로 /app 기준으로 디렉터리 구조를 맞춤
+COPY yes24BookScrape.ts /app/yes24BookScrape.ts
+COPY cloud-run/yes24-api/package.json /app/cloud-run/yes24-api/package.json
+RUN cd /app/cloud-run/yes24-api && npm install --omit=dev
+
+COPY cloud-run/yes24-api/server.ts /app/cloud-run/yes24-api/server.ts
+
+WORKDIR /app/cloud-run/yes24-api
+EXPOSE 8080
+CMD ["npx", "tsx", "server.ts"]

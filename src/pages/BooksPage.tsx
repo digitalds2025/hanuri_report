@@ -4,7 +4,7 @@ import { useAuth } from "../auth/AuthContext";
 import { HanuriBookSearchProgress } from "../components/HanuriBookSearchProgress";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 import { bookRowToYes24SearchPayload, fetchBookByTitleExact } from "../lib/fetchBookByTitle";
-import { localListBooks, localYes24SearchBook } from "../lib/localStoreApi";
+import { isYes24SearchAvailable, localListBooks, localYes24SearchBook } from "../lib/localStoreApi";
 import { bookUpsertInputFromYes24, persistBookUpsertRow } from "../lib/persistBookUpsert";
 import { studentsSectionTitle } from "../lib/studentsSectionTitle";
 import type { Book, Json } from "../lib/types/database";
@@ -30,7 +30,7 @@ export function BooksPage() {
   const [yes24Logs, setYes24Logs] = useState<string[]>([]);
   const yes24LogEndRef = useRef<HTMLDivElement>(null);
 
-  const canYes24Search = import.meta.env.DEV;
+  const canYes24Search = isYes24SearchAvailable();
 
   async function load() {
     setLoading(true);
@@ -75,9 +75,7 @@ export function BooksPage() {
 
   async function onYes24Search() {
     if (!canYes24Search) {
-      setErr(
-        "YES24 검색은 로컬 개발 서버(npm run dev)에서만 사용할 수 있습니다. GitHub Pages 등 배포본에는 `/api/local` + Playwright가 없습니다.",
-      );
+      setErr("이 사이트에서는 YES24 검색을 쓸 수 없어요. 로컬 `npm run dev`이거나, 관리자가 Cloud Run 연동을 켠 배포에서만 됩니다.");
       return;
     }
     setBusy("search");
@@ -230,18 +228,15 @@ export function BooksPage() {
             className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
             onClick={() => void onYes24Search()}
             disabled={busy !== null || !canYes24Search}
-            title={
-              !canYes24Search
-                ? "GitHub Pages 등 배포본에는 YES24용 서버가 없습니다. 로컬 npm run dev에서만 사용 가능합니다."
-                : undefined
-            }
+            title={!canYes24Search ? "YES24 연동이 꺼져 있거나, 로컬 개발 서버가 아닙니다." : undefined}
           >
             {busy === "search" ? "YES24 검색 중…" : "도서 검색 (YES24)"}
           </button>
           {!canYes24Search ? (
             <p className="max-w-md text-xs leading-relaxed text-amber-900">
-              배포된 사이트에서는 YES24 검색이 비활성입니다. 로컬 <code className="rounded bg-amber-100 px-0.5">npm run dev</code>
-              에서만 Playwright 연동이 됩니다.
+              YES24 검색은 이 배포에 연결되어 있지 않아요. 로컬{" "}
+              <code className="rounded bg-amber-100 px-0.5">npm run dev</code> 또는 Cloud Run이 켜진 사이트에서만
+              사용할 수 있어요.
             </p>
           ) : null}
         </div>
@@ -299,7 +294,7 @@ export function BooksPage() {
           disabled={busy !== null}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
         >
-          {busy === "save" ? "저장 중…" : isSupabaseConfigured() ? "Supabase에 저장" : "로컬 DB에 저장"}
+          {busy === "save" ? "저장 중…" : isSupabaseConfigured() ? "도서관에 저장" : "로컬 DB에 저장"}
         </button>
       </form>
 

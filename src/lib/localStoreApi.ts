@@ -1,4 +1,38 @@
+import { YES24_CLOUD_RUN_API_KEY, YES24_CLOUD_RUN_BASE_URL } from "../config/yes24CloudRun";
 import type { Book, Json, MonthlyReport, Student } from "./types/database";
+
+function yes24RemoteBaseUrl(): string {
+  const fromConfig = YES24_CLOUD_RUN_BASE_URL.trim();
+  const fromEnv = (import.meta.env.VITE_YES24_API_URL as string | undefined)?.trim() ?? "";
+  return (fromConfig || fromEnv).replace(/\/$/, "");
+}
+
+function yes24RemoteApiKey(): string {
+  return YES24_CLOUD_RUN_API_KEY.trim() || (import.meta.env.VITE_YES24_API_KEY as string | undefined)?.trim() || "";
+}
+
+function yes24SearchUrl(): string {
+  const base = yes24RemoteBaseUrl();
+  const path = "/api/local/books/yes24-search";
+  if (base) return `${base}${path}`;
+  return path;
+}
+
+function yes24SearchHeaders(): Record<string, string> {
+  const h: Record<string, string> = {
+    "Content-Type": "application/json",
+    Accept: "application/x-ndjson",
+  };
+  const key = yes24RemoteApiKey();
+  if (key) h["X-Api-Key"] = key;
+  return h;
+}
+
+/** 로컬 dev 플러그인 또는 Cloud Run(설정·Secret) 연동 시 true */
+export function isYes24SearchAvailable(): boolean {
+  if (import.meta.env.DEV) return true;
+  return Boolean(yes24RemoteBaseUrl() && yes24RemoteApiKey());
+}
 
 async function parseJson<T>(res: Response): Promise<T> {
   const text = await res.text();
@@ -145,9 +179,9 @@ export async function localYes24SearchBook(
   input: { title: string; author: string; publisher: string },
   options?: { onLog?: (message: string) => void },
 ): Promise<Yes24SearchResultPayload> {
-  const res = await fetch("/api/local/books/yes24-search", {
+  const res = await fetch(yes24SearchUrl(), {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/x-ndjson" },
+    headers: yes24SearchHeaders(),
     body: JSON.stringify({ ...input, streamLogs: true }),
   });
   if (!res.ok) {
