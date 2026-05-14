@@ -101,7 +101,7 @@ type ReportSectionProps = {
   title: string;
   children: ReactNode;
   className?: string;
-  /** 리본 타이틀 오른쪽 (수정 / 저장·취소) */
+  /** 리본 타이틀 오른쪽 (수정 / 저장·취소)1 */
   headerRight?: ReactNode;
 };
 
