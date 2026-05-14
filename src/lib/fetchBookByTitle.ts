@@ -92,10 +92,16 @@ export async function searchBooksByTitleSubstring(q: string, limit = 30): Promis
   return [];
 }
 
+export function bookAiKeywordsFromRow(b: Book): string[] {
+  const raw = b.ai_keywords;
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
+    .map((x) => x.trim());
+}
+
 export function bookRowToYes24SearchPayload(b: Book): Yes24SearchResultPayload {
-  const kw: string[] = Array.isArray(b.ai_keywords)
-    ? (b.ai_keywords as unknown[]).filter((x): x is string => typeof x === "string")
-    : [];
+  const kw = bookAiKeywordsFromRow(b);
   return {
     title: b.title,
     author: b.author,
