@@ -20,13 +20,8 @@ export function LoginPage() {
     return (
       <div className="mx-auto flex min-h-[70vh] max-w-md flex-col justify-center px-4">
         <div className="rounded-2xl border border-amber-200 bg-amber-50 p-6 text-center text-sm text-amber-950">
-          <p className="font-medium">Supabase가 연결되지 않았습니다.</p>
-          <p className="mt-2 text-amber-900/90">
-            <code className="rounded bg-amber-100 px-1">.env</code>에{" "}
-            <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_URL</code>,{" "}
-            <code className="rounded bg-amber-100 px-1">VITE_SUPABASE_ANON_KEY</code>를 설정한 뒤 다시
-            시도하세요.
-          </p>
+          <p className="font-medium">서버에 연결되지 않았습니다.</p>
+          <p className="mt-2 text-amber-900/90">관리자에게 문의하거나, 로컬 모드로 앱을 이용해 주세요.</p>
           <Link to="/students" className="mt-4 inline-block text-sm font-medium text-indigo-700 hover:underline">
             로컬 모드로 앱 열기 →
           </Link>

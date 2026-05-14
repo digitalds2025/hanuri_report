@@ -993,11 +993,11 @@ export function PeriodReportNewPage() {
   const runMindmapGeneration = useCallback(async () => {
     setMindmapGenErr(null);
     if (!isSupabaseConfigured() || !supabase) {
-      setMindmapGenErr("도서 조회·저장을 위해 Supabase 설정이 필요합니다.");
+      setMindmapGenErr("도서를 조회·저장하려면 연결 설정이 필요합니다.");
       return;
     }
     if (quarterMindmapBookIds.length === 0) {
-      setMindmapGenErr("이 분기 월간 레포트에 연결된 book_id1/book_id2가 없습니다. 월간에서 도서를 저장해 주세요.");
+      setMindmapGenErr("이 분기 월간에 연결된 도서가 없습니다. 월간 리포트에서 도서를 먼저 저장해 주세요.");
       return;
     }
     const rawGrade = (currentStudent?.student_grade ?? "").trim();
@@ -1017,7 +1017,7 @@ export function PeriodReportNewPage() {
       if (error) throw new Error(error.message);
       const rows = data ?? [];
       if (rows.length === 0) {
-        throw new Error("books 테이블에서 해당 도서 ID를 찾지 못했습니다.");
+        throw new Error("요청한 도서 정보를 찾을 수 없습니다.");
       }
       const text = await generateQuarterKnowledgeMindmapComment({
         studentGradeLabel: grade,
@@ -1080,20 +1080,20 @@ export function PeriodReportNewPage() {
       }
 
       if (!quarterRange) {
-        setMsg("분기 기간을 계산할 수 없습니다. end_ym을 확인해 주세요.");
+        setMsg("분기 기간을 계산할 수 없습니다. 링크를 다시 확인해 주세요.");
         return;
       }
 
       if (isSupabaseConfigured()) {
         if (!supabase) {
-          setMsg("Supabase가 설정되지 않았습니다.");
+          setMsg("데이터 저장 연결이 설정되지 않았습니다.");
           return;
         }
         const client = supabase;
 
         const qEnd = draftEndYm;
         if (!qEnd) {
-          setMsg("end_ym(분기 마지막 달)이 없습니다.");
+          setMsg("분기 마지막 달 정보가 없습니다.");
           return;
         }
         const mind = buildMindmapForSave();
@@ -1126,7 +1126,7 @@ export function PeriodReportNewPage() {
         return;
       }
 
-      setMsg("분기 리포트 저장은 Supabase(URL·anon 키)가 설정된 경우에만 가능합니다.");
+      setMsg("저장하려면 데이터 저장 연결이 필요합니다.");
     } catch (err) {
       setMsg(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1262,7 +1262,7 @@ export function PeriodReportNewPage() {
     return (
       <div className="mx-auto max-w-4xl space-y-4 p-6">
         <p className="text-sm font-medium text-slate-800">
-          분기 레포트 작성에는 주소에 <code className="rounded bg-slate-100 px-1">end_ym=YYYY-MM</code>(분기 마지막 달)이 필요합니다.
+          분기 레포트는 학생 상세에서 제공되는 링크로 들어와 주세요. 주소에 분기 마지막 달 정보가 없으면 이 화면을 열 수 없습니다.
         </p>
         <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
           ← 학생 상세에서 분기 작성 링크로 들어오기
@@ -1294,9 +1294,7 @@ export function PeriodReportNewPage() {
         </Link>
         <h1 className="mt-1 text-2xl font-bold text-slate-900">분기별 리포트 작성</h1>
         <p className="mt-1 text-sm text-slate-600">
-          주소의 <code className="rounded bg-slate-100 px-1">end_ym</code>(분기 <strong>마지막 달</strong>)을 기준으로, 그 달
-          회차를 포함해 <strong>연속 3개 회차</strong>의 월간 데이터로 분기를 구성합니다. 네 단계 입력 후{" "}
-          <strong>레포트 확인 · 저장</strong>에서 검토합니다. (<code className="rounded bg-slate-100 px-1">q_reports</code>)
+          분기 마지막 달을 기준으로 연속 3개월의 월간 데이터로 분기를 구성합니다. 입력이 끝나면 「레포트 확인 · 저장」에서 검토합니다.
         </p>
       </div>
 
@@ -1357,27 +1355,12 @@ export function PeriodReportNewPage() {
                 );
               })}
             </nav>
-            {canJumpQuarterSteps ? (
-              <p className="text-xs text-slate-500">
-                이 분기에 저장된 레포트가 있어 위 단계 탭을 눌러 원하는 화면으로 바로 이동할 수 있습니다.
-              </p>
-            ) : null}
 
             {quarterWizardStep === 1 ? (
               <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
                 <legend className="px-1 text-sm font-semibold text-slate-800">1. best 글쓰기 선정</legend>
                 <p className="text-xs text-slate-600">
-                  <code className="rounded bg-slate-100 px-0.5">end_ym</code> 마지막 달이{" "}
-                  <strong>{focusRoundForQuarter > 0 ? `${focusRoundForQuarter}회차` : "—"}</strong>일 때, 그 회차를 포함한{" "}
-                  <strong>연속 3개 회차</strong> 월간(
-                  <strong>
-                    {focusRoundForQuarter > 0
-                      ? `${Math.max(1, focusRoundForQuarter - 2)}·${Math.max(1, focusRoundForQuarter - 1)}·${focusRoundForQuarter}회`
-                      : "—"}
-                  </strong>
-                  )의 글쓰기 이미지(<code className="rounded bg-slate-100 px-0.5">writing_img_url1</code>,{" "}
-                  <code className="rounded bg-slate-100 px-0.5">writing_img_url2</code>)가 나열됩니다. 대표로 쓸{" "}
-                  <strong>한 장</strong>만 선택하세요.
+                  이 분기에 해당하는 월간 글쓰기 이미지가 나열됩니다. 대표로 쓸 <strong>한 장</strong>만 선택하세요.
                 </p>
                 {quarterWritingPicks.length === 0 ? (
                   <div className="rounded-lg border border-amber-200 bg-amber-50/80 px-3 py-2 text-sm text-amber-950">
@@ -1457,16 +1440,7 @@ export function PeriodReportNewPage() {
               <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
                 <legend className="px-1 text-sm font-semibold text-slate-800">2. 지식 마인드맵 생성</legend>
                 <p className="text-xs text-slate-600">
-                  이 분기 <strong>연속 3개월 월간</strong>(<code className="rounded bg-slate-100 px-0.5">m_reports</code>의{" "}
-                  <code className="rounded bg-slate-100 px-0.5">book_id1</code>,{" "}
-                  <code className="rounded bg-slate-100 px-0.5">book_id2</code>)로 연결된 도서를{" "}
-                  <code className="rounded bg-slate-100 px-0.5">books</code>에서 불러와,{" "}
-                  <code className="rounded bg-slate-100 px-0.5">ai_keywords</code>·<code className="rounded bg-slate-100 px-0.5">introduce</code>·
-                  <code className="rounded bg-slate-100 px-0.5">category</code>·<code className="rounded bg-slate-100 px-0.5">author_cmt</code>·
-                  <code className="rounded bg-slate-100 px-0.5">pub_cmt</code>·<code className="rounded bg-slate-100 px-0.5">ai_category</code>를
-                  반영해 Gemini가「이 학년에서 이 책들로 수업한 것이 왜 좋은 선택이었는지」서술합니다. (
-                  <code className="rounded bg-slate-100 px-0.5">VITE_GEMINI_API_KEY</code>,{" "}
-                  <code className="rounded bg-slate-100 px-0.5">VITE_GEMINI_MODEL</code>)
+                  이 분기 월간에 연결된 도서 정보를 바탕으로, AI가「이 학년에서 이 책들로 수업한 것이 왜 좋은 선택이었는지」코멘트를 생성합니다.
                 </p>
 
                 <div className="rounded-lg border border-indigo-100 bg-indigo-50/40 px-3 py-3">
@@ -1484,9 +1458,7 @@ export function PeriodReportNewPage() {
                     <p className="mt-3 text-xs text-slate-600">월간 레포트에 연결된 도서가 없습니다.</p>
                   ) : null}
                   {!quarterMindmapBooksLoading && quarterMindmapBookIds.length > 0 && orderedQuarterMindmapBooks.length === 0 ? (
-                    <p className="mt-3 text-xs text-amber-800">
-                      도서 ID는 있으나 <code className="rounded bg-white px-0.5">books</code>에서 찾지 못했습니다.
-                    </p>
+                    <p className="mt-3 text-xs text-amber-800">연결된 도서 정보를 찾을 수 없습니다.</p>
                   ) : null}
                   {orderedQuarterMindmapBooks.length > 0 ? (
                     <QuarterReadingMindmapPreview books={orderedQuarterMindmapBooks} />
@@ -1507,7 +1479,7 @@ export function PeriodReportNewPage() {
                     {mindmapGenBusy ? "생성 중…" : "지식 마인드맵 생성"}
                   </button>
                   <span className="text-xs text-slate-500">
-                    연결된 도서 ID {quarterMindmapBookIds.length}개
+                    연결된 도서 {quarterMindmapBookIds.length}권
                     {currentStudent?.student_grade?.trim() ? (
                       <> · 학년: {formatSchoolGradeLabel(currentStudent.student_grade)}</>
                     ) : null}
@@ -1527,7 +1499,7 @@ export function PeriodReportNewPage() {
                 </label>
                 {!mindmapRecord ? (
                   <p className="text-xs text-amber-800">
-                    mindmap JSON이 객체 형식이 아니거나 파싱할 수 없습니다. 아래「고급」에서 수정해 주세요.
+                    마인드맵 데이터 형식에 문제가 있을 수 있습니다. 아래「고급」에서 확인해 주세요.
                   </p>
                 ) : null}
                 
@@ -1756,14 +1728,9 @@ export function PeriodReportNewPage() {
             {quarterWizardStep === 5 ? (
               <div className="space-y-4">
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-900">
-                  아래는 저장될 분기 레포트 <strong>목차</strong>와 동일합니다. 각 블록은{" "}
-                  <strong>수정</strong>을 누른 뒤 내용을 고치고 <strong>저장</strong> 또는 <strong>취소</strong>하면 됩니다(월간 레포트
-                  확인 화면과 동일). 다듬은 뒤 <strong>분기 리포트 저장</strong>을 눌러 주세요. (
-                  <code className="rounded bg-white/80 px-0.5">best_writing_cmt</code>,{" "}
-                  <code className="rounded bg-white/80 px-0.5">mindmap_cmt</code>,{" "}
-                  <code className="rounded bg-white/80 px-0.5">growth_keywords</code>,{" "}
-                  <code className="rounded bg-white/80 px-0.5">growth_cmt</code>,{" "}
-                  <code className="rounded bg-white/80 px-0.5">teacher_ai_comment</code> 등)
+                  아래는 저장될 분기 레포트 <strong>목차</strong>와 동일합니다. 각 블록은 <strong>수정</strong>을 누른 뒤 내용을 고치고{" "}
+                  <strong>저장</strong> 또는 <strong>취소</strong>하면 됩니다(월간 레포트 확인 화면과 동일). 다듬은 뒤{" "}
+                  <strong>분기 리포트 저장</strong>을 눌러 주세요.
                 </div>
 
                 <div id="hanuri-export-root" className="rounded-xl bg-[#eaf1f9] py-6 font-sans shadow-sm ring-1 ring-slate-200/60">

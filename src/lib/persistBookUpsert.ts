@@ -85,6 +85,6 @@ export async function persistBookUpsertRow(row: BookUpsertInput): Promise<Persis
   return {
     ok: false,
     error:
-      "Supabase가 설정되지 않았습니다(.env의 VITE_SUPABASE_*). 프로덕션 빌드에서는 YES24 수집 후 books에 자동 저장되지 않습니다.",
+      "데이터 저장 연결이 없어 도서함에 자동 저장되지 않습니다.",
   };
 }

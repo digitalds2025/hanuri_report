@@ -103,7 +103,7 @@ export function StudentsPage() {
           if (delErr) throw new Error(delErr.message);
         } else {
           if (!import.meta.env.DEV) {
-            setListError("로컬 파일 DB는 npm run dev에서만 사용할 수 있습니다.");
+            setListError("이 환경에서는 로컬 학생 목록을 사용할 수 없습니다.");
             return;
           }
           await localDeleteStudent(studentId);
@@ -142,7 +142,7 @@ export function StudentsPage() {
         else setNickname("");
       } else {
         if (!import.meta.env.DEV) {
-          setFormError("로컬 파일 DB는 npm run dev에서만 사용할 수 있습니다.");
+          setFormError("이 환경에서는 로컬 학생 추가를 사용할 수 없습니다.");
           return;
         }
         await localInsertStudent({ nickname: nick, student_grade: grade });
@@ -263,11 +263,6 @@ export function StudentsPage() {
               </select>
             </label>
           </div>
-          {isSupabaseConfigured() && students.length > 0 ? (
-            <p className="text-xs text-slate-500">
-              학생 목록은 Supabase <code className="rounded bg-slate-100 px-1">public.students</code>에서 불러옵니다.
-            </p>
-          ) : null}
         </div>
         {loading ? (
           <p className="p-4 text-sm text-slate-500">불러오는 중…</p>

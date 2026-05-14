@@ -38,7 +38,7 @@ export function BooksPage() {
       if (isSupabaseConfigured()) {
         if (!supabase) {
           setBooks([]);
-          setErr("Supabase 미설정");
+          setErr("저장소 연결이 설정되지 않았습니다.");
           return;
         }
         const { data, error } = await supabase.from("books").select("*").order("created_at", { ascending: false });
@@ -51,7 +51,7 @@ export function BooksPage() {
       }
       if (!import.meta.env.DEV) {
         setBooks([]);
-        setErr("로컬 파일 DB는 npm run dev에서만 사용할 수 있습니다.");
+        setErr("이 환경에서는 로컬 도서함을 사용할 수 없습니다.");
         return;
       }
       const list = await localListBooks();
@@ -75,7 +75,7 @@ export function BooksPage() {
 
   async function onYes24Search() {
     if (!canYes24Search) {
-      setErr("이 사이트에서는 YES24 검색을 쓸 수 없어요. 로컬 `npm run dev`이거나, 관리자가 Cloud Run 연동을 켠 배포에서만 됩니다.");
+      setErr("이 사이트에서는 YES24 검색을 사용할 수 없습니다.");
       return;
     }
     setBusy("search");
@@ -232,23 +232,11 @@ export function BooksPage() {
           >
             {busy === "search" ? "YES24 검색 중…" : "도서 검색 (YES24)"}
           </button>
-          {!canYes24Search ? (
-            <p className="max-w-md text-xs leading-relaxed text-amber-900">
-              YES24 검색은 이 배포에 연결되어 있지 않아요. 로컬{" "}
-              <code className="rounded bg-amber-100 px-0.5">npm run dev</code> 또는 Cloud Run이 켜진 사이트에서만
-              사용할 수 있어요.
-            </p>
-          ) : null}
         </div>
         {yes24Logs.length > 0 ? (
           <div className="space-y-2">
             <HanuriBookSearchProgress messages={yes24Logs} active={busy === "search"} />
             <div ref={yes24LogEndRef} />
-            <p className="text-[10px] text-slate-500">
-              연결이 안 될 때는 설치된 Chrome → Edge → 내장 순으로 다시 시도해요.{" "}
-              <code className="rounded bg-slate-100 px-0.5 text-slate-600">YES24_PLAYWRIGHT_HEADED=1</code> 도 도움이 될
-              수 있어요.
-            </p>
           </div>
         ) : null}
         {url ? (

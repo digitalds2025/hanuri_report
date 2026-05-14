@@ -334,7 +334,7 @@ export function MonthlyReportNewPage() {
   async function runYes24RegisterBook() {
     if (!isYes24SearchAvailable()) {
       setBookSearchError(
-        "이 사이트에서는 YES24 자동 등록을 쓸 수 없어요. 로컬에서는 `npm run dev`로 쓸 수 있고, 온라인에서는 관리자가 Cloud Run 연동을 켜야 해요.",
+        "이 사이트에서는 YES24 자동 등록을 사용할 수 없습니다.",
       );
       return;
     }
@@ -571,7 +571,7 @@ export function MonthlyReportNewPage() {
         const urls: string[] = [];
         if (isSupabaseConfigured() && supabase) {
           if (!studentId) {
-            setImageErr("Supabase Storage에 올리려면 학생을 지정한 화면에서 진행해 주세요.");
+            setImageErr("이미지를 올리려면 학생을 지정한 화면에서 진행해 주세요.");
             return;
           }
           for (const file of toProcess) {
@@ -657,7 +657,7 @@ export function MonthlyReportNewPage() {
     try {
       if (isSupabaseConfigured()) {
         if (!supabase) {
-          setMsg("Supabase가 설정되지 않았습니다.");
+          setMsg("데이터 저장 연결이 설정되지 않았습니다.");
           return;
         }
 
@@ -742,7 +742,7 @@ export function MonthlyReportNewPage() {
       }
 
       if (!import.meta.env.DEV) {
-        setMsg("로컬 파일 DB는 npm run dev에서만 사용할 수 있습니다.");
+        setMsg("이 환경에서는 해당 저장 방식을 사용할 수 없습니다.");
         return;
       }
 
@@ -828,9 +828,6 @@ export function MonthlyReportNewPage() {
           );
         })}
       </nav>
-      {canJumpWizardSteps ? (
-        <p className="text-xs text-slate-500">저장된 레포트가 있어 위 단계 탭을 눌러 원하는 화면으로 바로 이동할 수 있습니다.</p>
-      ) : null}
 
       <form onSubmit={onSubmit} className="space-y-5 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <label className="block text-sm">
@@ -1069,12 +1066,7 @@ export function MonthlyReportNewPage() {
                       >
                         {yes24Busy ? "YES24 처리 중…" : "YES24에서 도서 등록"}
                       </button>
-                    ) : (
-                      <p className="text-xs leading-relaxed text-amber-900">
-                        YES24 자동 등록은 이 배포에 연결되어 있지 않아요. 로컬에서는{" "}
-                        <code className="rounded bg-white/80 px-0.5">npm run dev</code>로 사용할 수 있어요.
-                      </p>
-                    )}
+                    ) : null}
                   </div>
                 ) : null}
 
@@ -1084,13 +1076,6 @@ export function MonthlyReportNewPage() {
                   <div className="space-y-2">
                     <HanuriBookSearchProgress messages={yes24Logs} active={yes24Busy || bookSearchBusy} />
                     <div ref={yes24LogEndRef} />
-                    {import.meta.env.DEV ? (
-                      <p className="text-[10px] text-slate-500">
-                        연결이 안 될 때는 Chrome → Edge 순으로 다시 시도해요.{" "}
-                        <code className="rounded bg-slate-100 px-0.5 text-slate-600">YES24_PLAYWRIGHT_HEADED=1</code> 도
-                        참고해 주세요.
-                      </p>
-                    ) : null}
                   </div>
                 ) : null}
 
