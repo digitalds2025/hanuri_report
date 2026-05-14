@@ -9,7 +9,10 @@ ENV PORT=8080
 # 공식 Playwright 이미지와 npm playwright 패키지가 같은 브라우저 경로를 쓰도록
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
-# server.ts 가 ../../yes24BookScrape.ts 를 가리키므로 /app 기준으로 디렉터리 구조를 맞춤
+# yes24BookScrape.ts 는 /app 에 두고, Node 모듈 해석은 파일 위치(/app) 기준 → playwright 는 /app/node_modules 에 필요
+COPY cloud-run/yes24-api/package.root-for-docker.json /app/package.json
+RUN cd /app && npm install --omit=dev
+
 COPY yes24BookScrape.ts /app/yes24BookScrape.ts
 COPY cloud-run/yes24-api/package.json /app/cloud-run/yes24-api/package.json
 RUN cd /app/cloud-run/yes24-api && npm install --omit=dev
