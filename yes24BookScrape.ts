@@ -4,8 +4,8 @@
  *
  * Windows에서 `net::ERR_NETWORK_ACCESS_DENIED` 가 나오면:
  * - 채널을 지정하지 않은 경우 **설치된 Chrome → Edge → 내장 Chromium** 순으로 자동 재시도합니다.
- * - 개발 서버(`npm run dev`)에서는 기본 **창 표시(headed)**. 숨기려면 `YES24_FORCE_HEADLESS=1`.
- * - `YES24_PLAYWRIGHT_HEADED=1` 로도 창 표시(프리뷰 등).
+ * - 개발 서버(`npm run dev`)에서는 기본 **헤드리스(창 없음)**. 막힐 때만 `YES24_PLAYWRIGHT_HEADED=1`.
+ * - `YES24_FORCE_HEADLESS=1` 이면 항상 헤드리스(다른 env가 headed를 켠 경우 무시).
  * - 내장만 쓰려면: `YES24_PLAYWRIGHT_CHANNEL=bundled`
  */
 import { chromium, type LaunchOptions, type Page } from "playwright";
@@ -34,7 +34,7 @@ export type Yes24SearchOptions = {
   /** 단계별 로그(스트리밍 API에서 실시간 전달) */
   onLog?: (message: string) => void;
   /**
-   * true면 브라우저 창을 띄움(headless 아님). Vite 개발 서버에서 기본으로 true를 넘깁니다.
+   * true면 브라우저 창을 띄움(headless 아님). 로컬 플러그인은 기본 false(헤드리스)를 넘깁니다.
    * `YES24_FORCE_HEADLESS=1` 이면 무조건 헤드리스.
    */
   headed?: boolean;

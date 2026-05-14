@@ -534,8 +534,8 @@ export function localDbDevPlugin(): Plugin {
       const env = loadEnv(server.config.mode, root, "");
       const geminiApiKey = (env.VITE_GEMINI_API_KEY ?? "").trim();
       const geminiModel = (env.VITE_GEMINI_MODEL ?? "gemini-2.0-flash").trim();
-      /** `npm run dev`일 때 YES24 Playwright는 기본으로 창을 띄움(막히는 지점 확인용) */
-      const yes24PlaywrightHeaded = server.config.mode === "development";
+      /** YES24 Playwright: 기본은 창 없음(헤드리스). 막힐 때만 `.env`에 `YES24_PLAYWRIGHT_HEADED=1` */
+      const yes24PlaywrightHeaded = false;
 
       server.middlewares.use((req, res, next) => {
         const rawUrl = req.url ?? "";
@@ -570,8 +570,11 @@ export function localDbDevPlugin(): Plugin {
                 return;
               }
               let sg: SchoolGradeCode = "E1";
-              if (typeof body.student_grade === "string" && isSchoolGradeCode(body.student_grade.trim())) {
-                sg = body.student_grade.trim();
+              if (typeof body.student_grade === "string") {
+                const g = body.student_grade.trim();
+                if (isSchoolGradeCode(g)) {
+                  sg = g;
+                }
               } else if (typeof body.grade === "number") {
                 sg = mapLegacyNumericGradeToCode(body.grade);
               }
@@ -635,6 +638,7 @@ export function localDbDevPlugin(): Plugin {
                 score_writing: number;
                 score_growth: number;
                 teacher_comment?: string | null;
+                writing_img_url?: string | null;
                 writing_img_url1?: string | null;
                 writing_img_url2?: string | null;
                 book_id1?: string | null;

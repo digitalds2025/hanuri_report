@@ -75,7 +75,9 @@ export function BooksPage() {
 
   async function onYes24Search() {
     if (!canYes24Search) {
-      setErr("YES24 자동 검색은 개발 서버(npm run dev)에서만 사용할 수 있습니다.");
+      setErr(
+        "YES24 검색은 로컬 개발 서버(npm run dev)에서만 사용할 수 있습니다. GitHub Pages 등 배포본에는 `/api/local` + Playwright가 없습니다.",
+      );
       return;
     }
     setBusy("search");
@@ -222,16 +224,26 @@ export function BooksPage() {
             required
           />
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap items-start gap-2">
           <button
             type="button"
             className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm hover:bg-slate-50 disabled:opacity-50"
             onClick={() => void onYes24Search()}
             disabled={busy !== null || !canYes24Search}
-            title={!canYes24Search ? "npm run dev 에서만 사용 가능" : undefined}
+            title={
+              !canYes24Search
+                ? "GitHub Pages 등 배포본에는 YES24용 서버가 없습니다. 로컬 npm run dev에서만 사용 가능합니다."
+                : undefined
+            }
           >
             {busy === "search" ? "YES24 검색 중…" : "도서 검색 (YES24)"}
           </button>
+          {!canYes24Search ? (
+            <p className="max-w-md text-xs leading-relaxed text-amber-900">
+              배포된 사이트에서는 YES24 검색이 비활성입니다. 로컬 <code className="rounded bg-amber-100 px-0.5">npm run dev</code>
+              에서만 Playwright 연동이 됩니다.
+            </p>
+          ) : null}
         </div>
         {yes24Logs.length > 0 ? (
           <div className="space-y-2">

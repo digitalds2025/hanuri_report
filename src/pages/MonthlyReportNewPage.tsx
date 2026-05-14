@@ -333,7 +333,9 @@ export function MonthlyReportNewPage() {
 
   async function runYes24RegisterBook() {
     if (!import.meta.env.DEV) {
-      setBookSearchError("YES24에서 도서 등록은 로컬 개발 서버(npm run dev)에서만 사용할 수 있습니다.");
+      setBookSearchError(
+        "YES24 자동 등록은 브라우저만으로는 불가능합니다. GitHub Pages 등 배포본에는 Playwright용 `/api/local` 서버가 없습니다. 로컬에서 `npm run dev`로 등록하거나, 이후 Cloud Run 등 백엔드 API를 붙여 주세요.",
+      );
       return;
     }
     const title = bookSearchTitle.trim();
@@ -1068,7 +1070,11 @@ export function MonthlyReportNewPage() {
                         {yes24Busy ? "YES24 처리 중…" : "YES24에서 도서 등록"}
                       </button>
                     ) : (
-                      <p className="text-xs text-amber-900">미리보기 빌드에서는 YES24 등록을 사용할 수 없습니다.</p>
+                      <p className="text-xs leading-relaxed text-amber-900">
+                        <strong>배포본(GitHub Pages 등)</strong>에서는 YES24 등록을 사용할 수 없습니다. YES24는{" "}
+                        <code className="rounded bg-white/80 px-0.5">npm run dev</code>일 때만 로컬 Vite 서버가
+                        Playwright로 처리합니다. 웹에서 쓰려면 별도 서버(예: Cloud Run)가 필요합니다.
+                      </p>
                     )}
                   </div>
                 ) : null}
