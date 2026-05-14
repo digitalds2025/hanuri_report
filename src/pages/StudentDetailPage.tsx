@@ -23,16 +23,14 @@ import {
   enrollmentYearMonth,
   endYmForAnnualTargetYear,
   endYmForHalfYearCode,
+  findQuarterReportForYearMonth,
   halfYearCodeForEndYm,
-  quarterEndYmForYearMonth,
-  quarterYearKeyForEndYm,
   reportsByYearMonth,
   roundTableWindowBounds,
   currentYearMonth,
   isMonthDeadlinePassed,
 
   roundsElapsedThroughNow,
-  roundForYearMonth,
   visibleRoundCount,
   yearMonthForRound,
 } from "../lib/reportRounds";
@@ -125,60 +123,6 @@ function formatPublishedYmd(iso: string): string {
   });
 }
 
-function clipText(s: string | null | undefined, max: number): string {
-  const t = (s ?? "").replace(/\s+/g, " ").trim();
-  if (!t) return "";
-  return t.length > max ? `${t.slice(0, max)}…` : t;
-}
-
-function formatScoresLine(sc: {
-  score_reading: number;
-  score_thinking: number;
-  score_discussion: number;
-  score_writing: number;
-  score_growth: number;
-}): string {
-  return `독서 ${sc.score_reading} · 사고 ${sc.score_thinking} · 토론 ${sc.score_discussion} · 글쓰기 ${sc.score_writing} · 성장 ${sc.score_growth}`;
-}
-
-function formatQuarterLabelKo(quarterYear: string): string {
-  const m = /^(\d{4})-(\d)Q$/.exec(quarterYear);
-  if (!m) return quarterYear;
-  return `${m[1]}년 제${m[2]}분기`;
-}
-
-function formatHalfLabelKo(hc: string): string {
-  const m = /^(\d{4})-H([12])$/.exec(hc);
-  if (!m) return hc;
-  return `${m[1]}년 ${m[2] === "1" ? "상" : "하"}반기`;
-}
-
-function yearTimelinePreview(timeline: unknown): string {
-  if (timeline == null) return "";
-  if (typeof timeline === "string") return clipText(timeline, 200);
-  if (typeof timeline === "object") {
-    try {
-      return clipText(JSON.stringify(timeline), 220);
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-type ArchiveKind = "monthly" | "quarter" | "half" | "year";
-
-type ArchiveRow = {
-  key: string;
-  sortTs: number;
-  kind: ArchiveKind;
-  title: string;
-  subtitle: string;
-  preview: string;
-  scoresLine: string;
-  href?: string;
-};
-
 /** 회차별 5대 역량 꺾은선 — 항목별 색 */
 const PILLAR_LINE_COLORS: Record<PillarKey, string> = {
   reading: "#2563eb",
@@ -187,19 +131,6 @@ const PILLAR_LINE_COLORS: Record<PillarKey, string> = {
   writing: "#059669",
   growth: "#e11d48",
 };
-
-function archiveKindBadge(kind: ArchiveKind): { label: string; className: string } {
-  switch (kind) {
-    case "monthly":
-      return { label: "월간", className: "bg-indigo-50 text-indigo-800 ring-indigo-600/15" };
-    case "quarter":
-      return { label: "분기", className: "bg-violet-50 text-violet-900 ring-violet-600/15" };
-    case "half":
-      return { label: "반기", className: "bg-amber-50 text-amber-950 ring-amber-600/20" };
-    default:
-      return { label: "연간", className: "bg-teal-50 text-teal-950 ring-teal-600/15" };
-  }
-}
 
 export function StudentDetailPage() {
   const { user } = useAuth();
@@ -210,7 +141,6 @@ export function StudentDetailPage() {
     quarters: periodQuarters,
     halves: periodHalves,
     years: periodYears,
-    loading: lpr,
     error: periodErr,
   } = useStudentPeriodReports(id);
 
@@ -365,9 +295,7 @@ export function StudentDetailPage() {
       const report = byYm.get(ym);
       const hasMonthlyView = Boolean(report);
       const quarterSaved =
-        r % 3 === 0
-          ? periodQuarters.find((q) => q.quarter_end_ym === quarterEndYmForYearMonth(ym))
-          : undefined;
+        r % 3 === 0 ? findQuarterReportForYearMonth(periodQuarters, ym) : undefined;
       const halfKey = halfYearCodeForEndYm(ym);
       const halfSaved = r % 6 === 0 ? periodHalves.find((h) => h.half_year_code === halfKey) : undefined;
       const annualY = annualTargetYearForEndYm(ym);
@@ -430,7 +358,7 @@ export function StudentDetailPage() {
 
       return (
         <g data-round-view-report-menu={r}>
-          <title>{`${row.name} (${row.ym}) — 클릭하면 저장된 레포트 메뉴`}</title>
+          <title>{`${row.name} (${row.ym}) — 클릭하면 레포트 보기 메뉴`}</title>
           <text
             ref={(el) => {
               if (el) viewMenuButtonRefs.current.set(r, el);
@@ -470,100 +398,6 @@ export function StudentDetailPage() {
     [roundPillarChartRows, roundReportViewSlots, id, openViewMenuRound],
   );
 
-  const archiveRows = useMemo((): ArchiveRow[] => {
-    if (!id || !student) return [];
-    const rows: ArchiveRow[] = [];
-
-    for (const r of reports) {
-      const ts = Date.parse(r.created_at);
-      const sortTs = Number.isFinite(ts) ? ts : 0;
-      const round = anchorYm ? roundForYearMonth(anchorYm, r.year_month) : null;
-      const title =
-        round != null && Number.isFinite(round) ? `${round}회차 · ${r.year_month}` : r.year_month;
-      const preview =
-        clipText(r.growth_moments, 220) || clipText(r.teacher_note, 220) || "저장된 본문 요약이 없습니다.";
-      rows.push({
-        key: `m-${r.id}`,
-        sortTs,
-        kind: "monthly",
-        title,
-        subtitle: `발행 ${formatPublishedYmd(r.created_at)}`,
-        preview,
-        scoresLine: "",
-        href: `/students/${id}/monthly/new?ym=${encodeURIComponent(r.year_month)}&step=6`,
-      });
-    }
-
-    for (const q of periodQuarters) {
-      const ts = Date.parse(q.created_at);
-      const sortTs = Number.isFinite(ts) ? ts : 0;
-      const preview =
-        clipText(q.teacher_ai_comment, 160) ||
-        clipText(q.teacher_comment, 160) ||
-        clipText(q.growth_cmt, 160) ||
-        clipText(q.insight_desc, 160) ||
-        "교사 코멘트·로드맵 요약이 없습니다.";
-      const endYm = q.quarter_end_ym;
-      rows.push({
-        key: `q-${q.q_report_id}`,
-        sortTs,
-        kind: "quarter",
-        title: formatQuarterLabelKo(quarterYearKeyForEndYm(q.quarter_end_ym)),
-        subtitle: `${q.quarter_end_ym} · 발행 ${formatPublishedYmd(q.created_at)}`,
-        preview,
-        scoresLine: "",
-        href:
-          endYm != null
-            ? `/students/${id}/period/new?type=3m&end_ym=${encodeURIComponent(endYm)}&q_id=${encodeURIComponent(q.q_report_id)}`
-            : undefined,
-      });
-    }
-
-    for (const h of periodHalves) {
-      const ts = Date.parse(h.created_at);
-      const sortTs = Number.isFinite(ts) ? ts : 0;
-      const preview =
-        clipText(h.teacher_comment, 160) ||
-        clipText(h.type_description, 160) ||
-        clipText(h.reading_type_name, 80) ||
-        "반기 프로필 설명이 없습니다.";
-      const endYm = endYmForHalfYearCode(h.half_year_code);
-      rows.push({
-        key: `h-${h.h_report_id}`,
-        sortTs,
-        kind: "half",
-        title: formatHalfLabelKo(h.half_year_code),
-        subtitle: `${h.half_year_code} · 발행 ${formatPublishedYmd(h.created_at)}`,
-        preview,
-        scoresLine: formatScoresLine(h),
-        href:
-          endYm != null
-            ? `/students/${id}/period/new?type=6m&end_ym=${encodeURIComponent(endYm)}&h_id=${encodeURIComponent(h.h_report_id)}`
-            : undefined,
-      });
-    }
-
-    for (const y of periodYears) {
-      const ts = Date.parse(y.created_at);
-      const sortTs = Number.isFinite(ts) ? ts : 0;
-      const preview = yearTimelinePreview(y.annual_timeline) || "연간 타임라인 데이터가 없습니다.";
-      const endYm = endYmForAnnualTargetYear(y.target_year);
-      rows.push({
-        key: `y-${y.y_report_id}`,
-        sortTs,
-        kind: "year",
-        title: `${y.target_year}년 연간`,
-        subtitle: `발행 ${formatPublishedYmd(y.created_at)}`,
-        preview,
-        scoresLine: formatScoresLine(y),
-        href: `/students/${id}/period/new?type=12m&end_ym=${encodeURIComponent(endYm)}&y_id=${encodeURIComponent(y.y_report_id)}`,
-      });
-    }
-
-    rows.sort((a, b) => b.sortTs - a.sortTs);
-    return rows;
-  }, [reports, periodQuarters, periodHalves, periodYears, anchorYm, id, student]);
-
   if (!id) return <p className="text-sm text-red-600">잘못된 경로입니다.</p>;
 
   return (
@@ -595,7 +429,9 @@ export function StudentDetailPage() {
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="relative z-0 border-b border-slate-100 px-4 py-3 sm:px-5">
             <h2 className="text-sm font-semibold text-slate-800">회차별 월간 리포트</h2>
-            
+            {periodErr ? (
+              <p className="mt-2 text-xs text-red-600">기간(분기·반기·연간) 레포트 불러오기: {periodErr}</p>
+            ) : null}
           </div>
 
           <div className="overflow-x-auto px-2 pb-4 pt-2 sm:px-4">
@@ -670,9 +506,7 @@ export function StudentDetailPage() {
                     const ym = yearMonthForRound(anchorYm, r);
                     const report = byYm.get(ym);
                     const hasMonthly = Boolean(report);
-                    const hasQuarter =
-                      r % 3 === 0 &&
-                      periodQuarters.some((q) => q.quarter_end_ym === quarterEndYmForYearMonth(ym));
+                    const hasQuarter = r % 3 === 0 && Boolean(findQuarterReportForYearMonth(periodQuarters, ym));
                     const halfKey = halfYearCodeForEndYm(ym);
                     const hasHalf = r % 6 === 0 && periodHalves.some((h) => h.half_year_code === halfKey);
                     const annualY = annualTargetYearForEndYm(ym);
@@ -716,10 +550,8 @@ export function StudentDetailPage() {
           </div>
 
           <div className="border-t border-slate-100 px-4 py-3 sm:px-5">
-            <p className="text-xs font-medium text-slate-600">범례 (해당 회차 달·필수 레포트)</p>
-            <p className="mt-1 text-[11px] leading-snug text-slate-500">
-              필수: 매달 월간 · 3의 배수 회차에 분기 · 6의 배수에 반기 · 12의 배수에 연간
-            </p>
+            <p className="text-xs font-medium text-slate-600">시그널 설명</p>
+            
             <ul className="mt-2 flex flex-wrap gap-x-5 gap-y-2 text-xs text-slate-600">
               <li className="flex items-center gap-2">
                 <span
@@ -828,8 +660,7 @@ export function StudentDetailPage() {
               (() => {
                 const r = openViewMenuRound;
                 const ym = yearMonthForRound(anchorYm, r);
-                const quarterSaved =
-                  r % 3 === 0 ? periodQuarters.find((q) => q.quarter_end_ym === quarterEndYmForYearMonth(ym)) : undefined;
+                const quarterSaved = r % 3 === 0 ? findQuarterReportForYearMonth(periodQuarters, ym) : undefined;
                 const halfKey = halfYearCodeForEndYm(ym);
                 const halfSaved =
                   r % 6 === 0 ? periodHalves.find((h) => h.half_year_code === halfKey) : undefined;
@@ -869,7 +700,7 @@ export function StudentDetailPage() {
                     {quarterSaved ? (
                       <Link
                         role="menuitem"
-                        to={`/students/${id}/period/new?type=3m&end_ym=${encodeURIComponent(ym)}&q_id=${encodeURIComponent(quarterSaved.q_report_id)}`}
+                        to={`/students/${id}/period/new?type=3m&end_ym=${encodeURIComponent(quarterSaved.quarter_end_ym)}&q_id=${encodeURIComponent(quarterSaved.q_report_id)}`}
                         onClick={onNav}
                         className={activeCls}
                       >
@@ -879,7 +710,7 @@ export function StudentDetailPage() {
                     {halfSaved ? (
                       <Link
                         role="menuitem"
-                        to={`/students/${id}/period/new?type=6m&end_ym=${encodeURIComponent(ym)}&h_id=${encodeURIComponent(halfSaved.h_report_id)}`}
+                        to={`/students/${id}/period/new?type=6m&end_ym=${encodeURIComponent(endYmForHalfYearCode(halfSaved.half_year_code) ?? ym)}&h_id=${encodeURIComponent(halfSaved.h_report_id)}`}
                         onClick={onNav}
                         className={activeCls}
                       >
@@ -889,7 +720,7 @@ export function StudentDetailPage() {
                     {yearSaved ? (
                       <Link
                         role="menuitem"
-                        to={`/students/${id}/period/new?type=12m&end_ym=${encodeURIComponent(ym)}&y_id=${encodeURIComponent(yearSaved.y_report_id)}`}
+                        to={`/students/${id}/period/new?type=12m&end_ym=${encodeURIComponent(endYmForAnnualTargetYear(yearSaved.target_year))}&y_id=${encodeURIComponent(yearSaved.y_report_id)}`}
                         onClick={onNav}
                         className={activeCls}
                       >
@@ -915,7 +746,7 @@ export function StudentDetailPage() {
               <div className="mt-4 space-y-2">
                 {!hasAnyPillarChartPoint ? (
                   <p className="text-xs text-slate-600">
-                    이 구간에는 월간 역량 점수가 없습니다. X축 회차(파란 밑줄)를 누르면 저장된 레포트 메뉴가 열립니다.
+                    이 구간에는 월간 역량 점수가 없습니다. X축 회차(파란 밑줄)를 누르면 레포트 보기 메뉴가 열립니다.
                   </p>
                 ) : null}
                 <div className="h-[min(22rem,70vw)] w-full min-h-[240px]">
@@ -970,56 +801,6 @@ export function StudentDetailPage() {
           </div>
         </div>
 
-          <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
-            <div className="border-b border-slate-100 px-4 py-3 sm:px-5">
-              <h2 className="text-sm font-semibold text-slate-800">저장된 레포트 목록</h2>
-            </div>
-            {periodErr ? (
-              <p className="px-4 py-3 text-sm text-red-600 sm:px-5">기간 레포트 불러오기: {periodErr}</p>
-            ) : null}
-            {lr || lpr ? (
-              <p className="px-4 py-3 text-sm text-slate-500 sm:px-5">레포트 목록 불러오는 중…</p>
-            ) : null}
-            {!lr && !lpr && archiveRows.length === 0 ? (
-              <p className="px-4 py-8 text-center text-sm text-slate-500 sm:px-5">저장된 레포트가 없습니다.</p>
-            ) : null}
-            {!lr && !lpr && archiveRows.length > 0 ? (
-              <ul className="divide-y divide-slate-100">
-                {archiveRows.map((row) => {
-                  const b = archiveKindBadge(row.kind);
-                  return (
-                    <li key={row.key} className="px-4 py-4 sm:px-5">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div className="min-w-0 flex-1">
-                          <span
-                            className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold ring-1 ring-inset ${b.className}`}
-                          >
-                            {b.label}
-                          </span>
-                          <h3 className="mt-2 text-sm font-semibold text-slate-900">{row.title}</h3>
-                          <p className="mt-0.5 text-xs text-slate-500">{row.subtitle}</p>
-                          {row.scoresLine ? (
-                            <p className="mt-2 text-xs text-slate-600">{row.scoresLine}</p>
-                          ) : null}
-                          <p className="mt-2 text-sm leading-snug text-slate-700 line-clamp-4">{row.preview}</p>
-                        </div>
-                        {row.href ? (
-                          <Link
-                            to={row.href}
-                            className="shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-indigo-700 hover:bg-slate-50"
-                          >
-                            열기
-                          </Link>
-                        ) : null}
-                      </div>
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : null}
-          </div>
-
-          
         </>
       ) : null}
     </div>

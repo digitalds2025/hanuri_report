@@ -199,6 +199,18 @@ export function quarterEndYmForYearMonth(ym: string): string {
   return `${y}-${String(endMo).padStart(2, "0")}`;
 }
 
+/**
+ * 회차 달 `roundYm`과 같은 달력 분기의 `q_reports` 행을 찾는다.
+ * `quarter_end_ym`이 분기 마지막 달이 아니라 마법사에서 연 `end_ym`(분기 내 아무 달)으로 저장된 경우에도 맞춘다.
+ */
+export function findQuarterReportForYearMonth<T extends { quarter_end_ym: string }>(
+  quarters: T[],
+  roundYm: string,
+): T | undefined {
+  const key = quarterYearKeyForEndYm(roundYm);
+  return quarters.find((q) => quarterYearKeyForEndYm(q.quarter_end_ym) === key);
+}
+
 /** 레거시 분기 키 `YYYY-nQ` → 그 분기가 끝나는 달 `YYYY-MM`. */
 export function endYmForQuarterYearKey(quarterYear: string): string | null {
   const m = /^(\d{4})-([1-4])Q$/.exec(quarterYear.trim());

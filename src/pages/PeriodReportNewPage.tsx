@@ -1,9 +1,10 @@
-import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 import {
   dateRangeForPeriodEndingInMonth,
   enrollmentYearMonth,
+  findQuarterReportForYearMonth,
   quarterYearKeyForEndYm,
   reportsByYearMonth,
   roundForYearMonth,
@@ -22,7 +23,7 @@ import type { Json, MonthlyReport } from "../lib/types/database";
 import { useMonthlyReports } from "../hooks/useMonthlyReports";
 import { useStudentPeriodReports } from "../hooks/useStudentPeriodReports";
 import { useStudents } from "../hooks/useStudents";
-import type { HalfReportRow, QuarterReportRow, YearReportRow } from "../lib/studentPeriodReportsTypes";
+import type { HalfReportRow, YearReportRow } from "../lib/studentPeriodReportsTypes";
 import { ReportSection } from "../components/monthly/MonthlyReportResultView";
 
 /** 분기(3m) 작성 마법사 — 월간 작성 페이지와 동일한 단계 UX */
@@ -116,38 +117,6 @@ function parseInsightTagsTriple(text: string): [string, string, string] {
   } catch {
     return ["", "", ""];
   }
-}
-
-function parseGrowthKeywordStrings(j: Json | null | undefined): string[] {
-  if (j == null) return [];
-  if (!Array.isArray(j)) return [];
-  return j.filter((x): x is string => typeof x === "string").map((s) => s.trim()).filter(Boolean);
-}
-
-function mindmapBookJsonToPreviewBooks(j: Json | null | undefined): QuarterMindmapBookPreview[] {
-  if (j == null) return [];
-  if (!Array.isArray(j)) return [];
-  const out: QuarterMindmapBookPreview[] = [];
-  for (const item of j) {
-    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
-    const o = item as Record<string, unknown>;
-    const id = typeof o.id === "string" ? o.id : "";
-    if (!id) continue;
-    out.push({
-      id,
-      title: typeof o.title === "string" ? o.title : "제목 없음",
-      cover_url: typeof o.cover_url === "string" ? o.cover_url : null,
-      ai_category: typeof o.ai_category === "string" ? o.ai_category : null,
-      ai_keywords: (o.ai_keywords ?? []) as Json,
-    });
-  }
-  return out;
-}
-
-function savedQuarterGrowthKeywords(row: QuarterReportRow): string[] {
-  const a = parseGrowthKeywordStrings(row.growth_keywords);
-  if (a.length > 0) return a;
-  return parseGrowthKeywordStrings(row.insight_tags);
 }
 
 function parseJsonField(text: string): Json | null {
@@ -363,88 +332,6 @@ function PeriodSavedViewShell(props: {
   );
 }
 
-function QuarterSavedBody({ row }: { row: QuarterReportRow }) {
-  const books = mindmapBookJsonToPreviewBooks(row.mindmap_book);
-  const kws = savedQuarterGrowthKeywords(row);
-  const growthBody = (row.growth_cmt ?? "").trim() || (row.insight_desc ?? "").trim();
-
-  return (
-    <>
-      <div className="border-b border-slate-100 pb-4">
-        <p className="text-xs font-medium uppercase tracking-wide text-slate-500">분기</p>
-        <p className="mt-1 text-base font-semibold text-slate-900">
-          {formatQuarterLabelKo(quarterYearKeyForEndYm(row.quarter_end_ym))}
-        </p>
-        <p className="mt-1 text-sm text-slate-600">
-          {row.quarter_end_ym} · 발행 {formatPublishedYmd(row.created_at)}
-        </p>
-      </div>
-
-      <section className="space-y-3">
-        <h3 className="text-sm font-semibold text-slate-900">3개월 Best 글쓰기</h3>
-        {row.best_writing_url?.trim() ? (
-          <div className="flex justify-center">
-            <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-slate-50 p-2">
-              <img src={row.best_writing_url.trim()} alt="분기 Best 글쓰기" className="h-auto w-full object-contain" loading="lazy" />
-            </div>
-          </div>
-        ) : (
-          <p className="text-sm text-slate-500">저장된 이미지가 없습니다.</p>
-        )}
-        {row.best_writing_cmt?.trim() ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">{row.best_writing_cmt.trim()}</p>
-        ) : (
-          <p className="text-sm text-slate-500">Best 글 소개 문구가 없습니다.</p>
-        )}
-      </section>
-
-      <section className="space-y-3 border-t border-slate-100 pt-6">
-        <h3 className="text-sm font-semibold text-slate-900">지식 마인드맵</h3>
-        {books.length > 0 ? (
-          <QuarterReadingMindmapPreview books={books} />
-        ) : (
-          <p className="text-sm text-slate-500">마인드맵용 도서 스냅샷이 없습니다.</p>
-        )}
-        {row.mindmap_cmt?.trim() ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">{row.mindmap_cmt.trim()}</p>
-        ) : (
-          <p className="text-sm text-slate-500">지식·수업 타당성 코멘트가 없습니다.</p>
-        )}
-      </section>
-
-      <section className="space-y-3 border-t border-slate-100 pt-6">
-        <h3 className="text-sm font-semibold text-slate-900">성장 인사이트</h3>
-        {kws.length > 0 ? (
-          <div className="flex flex-wrap gap-2">
-            {kws.map((t, i) => (
-              <span
-                key={`${i}-${t}`}
-                className="rounded-lg bg-[#1e4d7b] px-2.5 py-1.5 text-sm font-medium text-white shadow-sm"
-              >
-                {t}
-              </span>
-            ))}
-          </div>
-        ) : null}
-        {growthBody ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">{growthBody}</p>
-        ) : (
-          <p className="text-sm text-slate-500">성장 인사이트 본문이 없습니다.</p>
-        )}
-      </section>
-
-      <section className="space-y-3 border-t border-slate-100 pt-6">
-        <h3 className="text-sm font-semibold text-slate-900">선생님의 따뜻한 한마디</h3>
-        {row.teacher_ai_comment?.trim() ? (
-          <p className="whitespace-pre-wrap text-sm leading-relaxed text-slate-800">{row.teacher_ai_comment.trim()}</p>
-        ) : (
-          <p className="text-sm text-slate-500">확장 한마디(teacher_ai_comment)가 없습니다.</p>
-        )}
-      </section>
-    </>
-  );
-}
-
 function HalfSavedBody({ row }: { row: HalfReportRow }) {
   return (
     <>
@@ -528,9 +415,11 @@ export function PeriodReportNewPage() {
 
   const draftEndYm = useMemo(() => {
     const raw = searchParams.get("end_ym");
-    if (!raw || !/^\d{4}-\d{2}$/.test(raw.trim())) return null;
-    return raw.trim();
-  }, [searchParams]);
+    if (raw && /^\d{4}-\d{2}$/.test(raw.trim())) return raw.trim();
+    const qe = savedQuarter?.quarter_end_ym?.trim() ?? "";
+    if (qId && qe && /^\d{4}-\d{2}$/.test(qe)) return qe;
+    return null;
+  }, [searchParams, qId, savedQuarter]);
 
   const draftUrlType = useMemo(() => (searchParams.get("type") ?? "3m").trim(), [searchParams]);
 
@@ -549,7 +438,7 @@ export function PeriodReportNewPage() {
   const [quarterFinalizeErr, setQuarterFinalizeErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
-  const [quarterWizardStep, setQuarterWizardStep] = useState(1);
+  const [quarterWizardStep, setQuarterWizardStep] = useState(() => (qId ? 5 : 1));
   const [bestWritingUrl, setBestWritingUrl] = useState("");
   const [mindmapGenBusy, setMindmapGenBusy] = useState(false);
   const [mindmapGenErr, setMindmapGenErr] = useState<string | null>(null);
@@ -565,6 +454,9 @@ export function PeriodReportNewPage() {
   const [draftQuarterMindmap, setDraftQuarterMindmap] = useState("");
   const [draftQuarterGrowthCmt, setDraftQuarterGrowthCmt] = useState("");
   const [draftQuarterTeacher, setDraftQuarterTeacher] = useState("");
+
+  /** `q_id`로 저장본 열 때 마법사 상태에 한 번 주입 */
+  const hydratedQuarterViewKeyRef = useRef<string | null>(null);
 
   const anchorYm = useMemo(() => {
     const st = students.find((s) => s.student_id === studentId);
@@ -597,11 +489,48 @@ export function PeriodReportNewPage() {
     if (!draftEndYm) return "";
     return quarterYearKeyForEndYm(draftEndYm);
   }, [draftEndYm]);
-  const savedQuarterForDraft = useMemo(
-    () => quarters.find((q) => q.quarter_end_ym === draftEndYm) ?? null,
-    [quarters, draftEndYm],
-  );
+  const savedQuarterForDraft = useMemo(() => {
+    if (qId && savedQuarter) return savedQuarter;
+    if (!draftEndYm) return null;
+    return findQuarterReportForYearMonth(quarters, draftEndYm) ?? quarters.find((q) => q.quarter_end_ym === draftEndYm) ?? null;
+  }, [qId, savedQuarter, quarters, draftEndYm]);
   const canJumpQuarterSteps = Boolean(savedQuarterForDraft);
+
+  useEffect(() => {
+    if (!qId) {
+      hydratedQuarterViewKeyRef.current = null;
+      return;
+    }
+    if (!studentId || !savedQuarter) return;
+
+    const mark = `${studentId}:${qId}`;
+    if (hydratedQuarterViewKeyRef.current === mark) return;
+    hydratedQuarterViewKeyRef.current = mark;
+
+    const row = savedQuarter;
+    const md = row.mindmap_data;
+    const summaryObj: Record<string, unknown> =
+      md && typeof md === "object" && !Array.isArray(md) ? { ...(md as Record<string, unknown>) } : {};
+    const mc = (row.mindmap_cmt ?? "").trim();
+    const existing = summaryObj.ai_knowledge_network_comment;
+    const hasKnowledge = typeof existing === "string" && existing.trim().length > 0;
+    if (mc && !hasKnowledge) {
+      summaryObj.ai_knowledge_network_comment = mc;
+    }
+    setSummaryText(JSON.stringify(summaryObj, null, 2));
+
+    const gk = row.growth_keywords ?? row.insight_tags;
+    setInsightsText(Array.isArray(gk) ? JSON.stringify(gk) : "[]");
+
+    setRoadmapText((row.growth_cmt ?? row.insight_desc ?? "").trim());
+    setTeacherCommentSeed((row.teacher_comment ?? "").trim());
+    setTeacherComment((row.teacher_ai_comment ?? "").trim());
+    setBestWritingComment((row.best_writing_cmt ?? "").trim());
+    setBestWritingUrl((row.best_writing_url ?? "").trim());
+    setQuarterWizardStep(5);
+    setQuarterEditSection(null);
+    setMsg(null);
+  }, [qId, savedQuarter, studentId]);
 
   const mindmapJsonOk = useMemo(() => {
     try {
@@ -812,7 +741,7 @@ export function PeriodReportNewPage() {
   );
 
   useEffect(() => {
-    if (qId || hId || yId) return;
+    if (hId || yId) return;
     if (draftUrlType !== "3m") return;
     if (!studentId || !draftEndYm) return;
     if (!isSupabaseConfigured() || !supabase) return;
@@ -1147,104 +1076,88 @@ export function PeriodReportNewPage() {
     );
   }
 
-  if (qId || hId || yId) {
-    if (prLoading) {
-      return (
-        <div className="mx-auto max-w-3xl p-4">
-          <p className="text-sm text-slate-600">저장된 기간 레포트를 불러오는 중…</p>
-        </div>
-      );
-    }
-    if (prError) {
+  if ((qId || hId || yId) && prLoading) {
+    return (
+      <div className="mx-auto max-w-3xl p-4">
+        <p className="text-sm text-slate-600">저장된 기간 레포트를 불러오는 중…</p>
+      </div>
+    );
+  }
+  if ((qId || hId || yId) && prError) {
+    return (
+      <div className="mx-auto max-w-3xl space-y-4 p-4">
+        <p className="text-sm text-red-600">불러오기 오류: {prError}</p>
+        <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
+          ← 학생 상세
+        </Link>
+      </div>
+    );
+  }
+
+  if (hId) {
+    if (!savedHalf) {
       return (
         <div className="mx-auto max-w-3xl space-y-4 p-4">
-          <p className="text-sm text-red-600">불러오기 오류: {prError}</p>
+          <p className="text-sm text-slate-600">해당 반기 저장 레포트를 찾을 수 없습니다.</p>
           <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
             ← 학생 상세
           </Link>
         </div>
       );
     }
+    const draftHrefHalf = `/students/${studentId}`;
+    return (
+      <PeriodSavedViewShell
+        studentId={studentId}
+        title="반기 레포트 (저장본)"
+        subtitle={`${savedHalf.half_year_code} · 발행 ${formatPublishedYmd(savedHalf.created_at)}`}
+        newDraftHref={draftHrefHalf}
+      >
+        <HalfSavedBody row={savedHalf} />
+      </PeriodSavedViewShell>
+    );
+  }
 
-    const endYmFromParams = (searchParams.get("end_ym") ?? "").trim();
-
-    if (qId) {
-      if (!savedQuarter) {
-        return (
-          <div className="mx-auto max-w-3xl space-y-4 p-4">
-            <p className="text-sm text-slate-600">해당 분기 저장 레포트를 찾을 수 없습니다.</p>
-            <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← 학생 상세
-            </Link>
-          </div>
-        );
-      }
-      const endYm = savedQuarter.quarter_end_ym || endYmFromParams;
-      const draftHref = `/students/${studentId}/period/new?type=3m&end_ym=${encodeURIComponent(endYm)}`;
+  if (yId) {
+    if (!savedYear) {
       return (
-        <PeriodSavedViewShell
-          studentId={studentId}
-          title="분기 레포트 (저장본)"
-          subtitle={`${formatQuarterLabelKo(quarterYearKeyForEndYm(savedQuarter.quarter_end_ym))} · 발행 ${formatPublishedYmd(savedQuarter.created_at)}`}
-          newDraftHref={draftHref}
-        >
-          <QuarterSavedBody row={savedQuarter} />
-        </PeriodSavedViewShell>
+        <div className="mx-auto max-w-3xl space-y-4 p-4">
+          <p className="text-sm text-slate-600">해당 연간 저장 레포트를 찾을 수 없습니다.</p>
+          <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← 학생 상세
+          </Link>
+        </div>
       );
     }
+    const draftHrefYear = `/students/${studentId}`;
+    return (
+      <PeriodSavedViewShell
+        studentId={studentId}
+        title="연간 레포트 (저장본)"
+        subtitle={`${savedYear.target_year}년 · 발행 ${formatPublishedYmd(savedYear.created_at)}`}
+        newDraftHref={draftHrefYear}
+      >
+        <YearSavedBody row={savedYear} />
+      </PeriodSavedViewShell>
+    );
+  }
 
-    if (hId) {
-      if (!savedHalf) {
-        return (
-          <div className="mx-auto max-w-3xl space-y-4 p-4">
-            <p className="text-sm text-slate-600">해당 반기 저장 레포트를 찾을 수 없습니다.</p>
-            <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← 학생 상세
-            </Link>
-          </div>
-        );
-      }
-      const draftHref = `/students/${studentId}`;
+  if (qId) {
+    if (!savedQuarter) {
       return (
-        <PeriodSavedViewShell
-          studentId={studentId}
-          title="반기 레포트 (저장본)"
-          subtitle={`${savedHalf.half_year_code} · 발행 ${formatPublishedYmd(savedHalf.created_at)}`}
-          newDraftHref={draftHref}
-        >
-          <HalfSavedBody row={savedHalf} />
-        </PeriodSavedViewShell>
-      );
-    }
-
-    if (yId) {
-      if (!savedYear) {
-        return (
-          <div className="mx-auto max-w-3xl space-y-4 p-4">
-            <p className="text-sm text-slate-600">해당 연간 저장 레포트를 찾을 수 없습니다.</p>
-            <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
-              ← 학생 상세
-            </Link>
-          </div>
-        );
-      }
-      const draftHref = `/students/${studentId}`;
-      return (
-        <PeriodSavedViewShell
-          studentId={studentId}
-          title="연간 레포트 (저장본)"
-          subtitle={`${savedYear.target_year}년 · 발행 ${formatPublishedYmd(savedYear.created_at)}`}
-          newDraftHref={draftHref}
-        >
-          <YearSavedBody row={savedYear} />
-        </PeriodSavedViewShell>
+        <div className="mx-auto max-w-3xl space-y-4 p-4">
+          <p className="text-sm text-slate-600">해당 분기 저장 레포트를 찾을 수 없습니다.</p>
+          <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
+            ← 학생 상세
+          </Link>
+        </div>
       );
     }
   }
 
-  const isQuarterDraft = !qId && !hId && !yId;
+  const isQuarterComposer = !hId && !yId && draftUrlType === "3m";
 
-  if (isQuarterDraft && (draftUrlType === "6m" || draftUrlType === "12m")) {
+  if (!hId && !yId && (draftUrlType === "6m" || draftUrlType === "12m")) {
     return (
       <div className="mx-auto max-w-4xl space-y-4 p-6">
         <p className="text-sm font-medium text-slate-800">이 화면은 분기별 레포트 작성 전용입니다.</p>
@@ -1258,7 +1171,7 @@ export function PeriodReportNewPage() {
     );
   }
 
-  if (isQuarterDraft && !draftEndYm) {
+  if (isQuarterComposer && !draftEndYm && !qId) {
     return (
       <div className="mx-auto max-w-4xl space-y-4 p-6">
         <p className="text-sm font-medium text-slate-800">
@@ -1271,11 +1184,11 @@ export function PeriodReportNewPage() {
     );
   }
 
-  if (isQuarterDraft && studentsLoading) {
+  if (isQuarterComposer && studentsLoading) {
     return <div className="mx-auto max-w-4xl p-6 text-sm text-slate-600">학생 정보를 불러오는 중…</div>;
   }
 
-  if (isQuarterDraft && !students.some((s) => s.student_id === studentId)) {
+  if (isQuarterComposer && !students.some((s) => s.student_id === studentId)) {
     return (
       <div className="mx-auto max-w-4xl space-y-4 p-6">
         <p className="text-sm text-red-600">학생 목록에서 이 학생을 찾을 수 없습니다.</p>
@@ -1292,9 +1205,11 @@ export function PeriodReportNewPage() {
         <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
           ← 학생 상세
         </Link>
-        <h1 className="mt-1 text-2xl font-bold text-slate-900">분기별 리포트 작성</h1>
+        <h1 className="mt-1 text-2xl font-bold text-slate-900">{qId ? "분기별 리포트 보기 · 수정" : "분기별 리포트 작성"}</h1>
         <p className="mt-1 text-sm text-slate-600">
-          분기 마지막 달을 기준으로 연속 3개월의 월간 데이터로 분기를 구성합니다. 입력이 끝나면 「레포트 확인 · 저장」에서 검토합니다.
+          {qId
+            ? "저장된 분기 레포트를 불러왔습니다. 상단 단계 탭으로 이동해 내용을 고칠 수 있으며, 「레포트 확인 · 저장」 화면은 작성 직후와 동일합니다."
+            : "분기 마지막 달을 기준으로 연속 3개월의 월간 데이터로 분기를 구성합니다. 입력이 끝나면 「레포트 확인 · 저장」에서 검토합니다."}
         </p>
       </div>
 
@@ -1728,9 +1643,19 @@ export function PeriodReportNewPage() {
             {quarterWizardStep === 5 ? (
               <div className="space-y-4">
                 <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-900">
-                  아래는 저장될 분기 레포트 <strong>목차</strong>와 동일합니다. 각 블록은 <strong>수정</strong>을 누른 뒤 내용을 고치고{" "}
-                  <strong>저장</strong> 또는 <strong>취소</strong>하면 됩니다(월간 레포트 확인 화면과 동일). 다듬은 뒤{" "}
-                  <strong>분기 리포트 저장</strong>을 눌러 주세요.
+                  {qId ? (
+                    <>
+                      아래는 <strong>저장된 분기 레포트</strong>와 동일한 화면입니다. 각 블록은 <strong>수정</strong>을 누른 뒤 내용을 고치고{" "}
+                      <strong>저장</strong> 또는 <strong>취소</strong>하면 됩니다(월간 레포트 확인 화면과 동일). 다듬은 뒤{" "}
+                      <strong>분기 리포트 저장</strong>을 눌러 변경 사항을 반영하세요.
+                    </>
+                  ) : (
+                    <>
+                      아래는 저장될 분기 레포트 <strong>목차</strong>와 동일합니다. 각 블록은 <strong>수정</strong>을 누른 뒤 내용을 고치고{" "}
+                      <strong>저장</strong> 또는 <strong>취소</strong>하면 됩니다(월간 레포트 확인 화면과 동일). 다듬은 뒤{" "}
+                      <strong>분기 리포트 저장</strong>을 눌러 주세요.
+                    </>
+                  )}
                 </div>
 
                 <div id="hanuri-export-root" className="rounded-xl bg-[#eaf1f9] py-6 font-sans shadow-sm ring-1 ring-slate-200/60">
