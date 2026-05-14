@@ -1,10 +1,12 @@
 /**
  * YES24 검색 API — Cloud Run 등 Node 서버에서 실행.
- * 루트의 yes24BookScrape.ts 는 `../../yes24BookScrape.ts` 로 import (Dockerfile 에서 동일 디렉터리 구조 유지).
+ * 루트의 yes24BookScrape.ts 는 `../../yes24BookScrape.ts` (Dockerfile 과 동일 경로).
+ *
+ * yes24BookScrape 은 상단에서 import 하지 않습니다. Playwright 로딩이 무겁고 Cloud Run 기동
+ * 제한 시간 안에 8080 리슨이 늦어지면 배포가 실패합니다. 첫 YES24 요청 시에만 동적 import 합니다.
  */
 import cors from "cors";
 import express from "express";
-import { searchYes24AndAnalyze } from "../../yes24BookScrape.ts";
 
 const PORT = Number(process.env.PORT) || 8080;
 const apiSecret = (process.env.YES24_API_SECRET ?? "").trim();
@@ -47,6 +49,12 @@ function clientSecret(req: express.Request): string {
   return m?.[1]?.trim() ?? "";
 }
 
+let scrapeModulePromise: Promise<typeof import("../../yes24BookScrape.ts")> | null = null;
+function loadYes24Scrape() {
+  if (!scrapeModulePromise) scrapeModulePromise = import("../../yes24BookScrape.ts");
+  return scrapeModulePromise;
+}
+
 app.post("/api/local/books/yes24-search", async (req, res) => {
   if (!apiSecret) {
     res.status(500).json({ error: "서버에 YES24_API_SECRET 이 설정되지 않았습니다." });
@@ -78,6 +86,8 @@ app.post("/api/local/books/yes24-search", async (req, res) => {
   const streamLogs = Boolean(body.streamLogs);
 
   try {
+    const { searchYes24AndAnalyze } = await loadYes24Scrape();
+
     if (streamLogs) {
       res.writeHead(200, {
         "Content-Type": "application/x-ndjson; charset=utf-8",
@@ -117,6 +127,6 @@ app.post("/api/local/books/yes24-search", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
+app.listen(PORT, "0.0.0.0", () => {
   console.log(`yes24-api listening on ${PORT}`);
 });

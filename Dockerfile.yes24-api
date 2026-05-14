@@ -6,6 +6,8 @@ FROM mcr.microsoft.com/playwright:v1.60.0-jammy
 ENV NODE_ENV=production
 ENV YES24_FORCE_HEADLESS=1
 ENV PORT=8080
+# 공식 Playwright 이미지와 npm playwright 패키지가 같은 브라우저 경로를 쓰도록
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 # server.ts 가 ../../yes24BookScrape.ts 를 가리키므로 /app 기준으로 디렉터리 구조를 맞춤
 COPY yes24BookScrape.ts /app/yes24BookScrape.ts
@@ -16,4 +18,5 @@ COPY cloud-run/yes24-api/server.ts /app/cloud-run/yes24-api/server.ts
 
 WORKDIR /app/cloud-run/yes24-api
 EXPOSE 8080
-CMD ["npx", "tsx", "server.ts"]
+# npx 는 첫 기동 시 레지스트리 조회 등으로 느려질 수 있어 로컬 tsx 바이너리 사용
+CMD ["./node_modules/.bin/tsx", "server.ts"]

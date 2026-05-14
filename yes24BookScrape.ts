@@ -1,6 +1,9 @@
 /**
  * YES24 검색·상세 스크래핑 + Gemini로 ai_category / ai_keywords 추출.
- * Vite 개발 서버(local-db-dev-plugin)에서만 실행됩니다.
+ * 실행 위치: 로컬 `npm run dev`(Vite 플러그인) 또는 Cloud Run(`cloud-run/yes24-api/server.ts`가 이 모듈을 import).
+ *
+ * Cloud Run 주소·브라우저용 API 비밀은 이 파일에 적지 않습니다.
+ * → 웹앱 쪽 `src/config/yes24CloudRun.ts` 의 `YES24_CLOUD_RUN_BASE_URL` / `YES24_CLOUD_RUN_API_KEY` 만 수정하세요.
  *
  * Windows에서 `net::ERR_NETWORK_ACCESS_DENIED` 가 나오면:
  * - 채널을 지정하지 않은 경우 **설치된 Chrome → Edge → 내장 Chromium** 순으로 자동 재시도합니다.
