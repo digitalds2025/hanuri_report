@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { ProtectedRoute } from "../components/auth/ProtectedRoute";
 import { AppShell } from "../components/layout/AppShell";
 import { BooksPage } from "../pages/BooksPage";
+import { BriefingMaterialPage } from "../pages/BriefingMaterialPage";
 import { LoginPage } from "../pages/LoginPage";
 import { MonthlyReportNewPage } from "../pages/MonthlyReportNewPage";
 import { PeriodReportNewPage } from "../pages/PeriodReportNewPage";
@@ -20,6 +21,7 @@ export function AppRoutes() {
           <Route path="students/:id/monthly/new" element={<MonthlyReportNewPage />} />
           <Route path="students/:id/period/new" element={<PeriodReportNewPage />} />
           <Route path="books" element={<BooksPage />} />
+          <Route path="briefing-material" element={<BriefingMaterialPage />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/students" replace />} />

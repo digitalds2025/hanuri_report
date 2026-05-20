@@ -7,6 +7,8 @@ interface ImportMetaEnv {
   readonly VITE_YES24_API_URL?: string;
   /** Cloud Run YES24_API_SECRET 과 동일(브라우저 번들에 포함됨 — 키 제한 권장) */
   readonly VITE_YES24_API_KEY?: string;
+  readonly VITE_GEMINI_API_KEY?: string;
+  readonly VITE_GEMINI_MODEL?: string;
 }
 
 interface ImportMeta {

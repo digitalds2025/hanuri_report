@@ -135,6 +135,16 @@ type LegacyMonthly = {
   created_at: string;
 };
 
+type LocalBriefingKit = {
+  id: string;
+  title: string;
+  created_at: string;
+  reference_text: string;
+  meta: Json;
+  slide_plans: Json;
+  slides: Json;
+};
+
 type LocalDatabase = {
   students: Student[];
   books: Book[];
@@ -142,10 +152,19 @@ type LocalDatabase = {
   q_reports: LocalQReport[];
   h_reports: LocalHReport[];
   y_reports: LocalYReport[];
+  briefing_kits: LocalBriefingKit[];
 };
 
 function defaultDb(): LocalDatabase {
-  return { students: [], books: [], m_reports: [], q_reports: [], h_reports: [], y_reports: [] };
+  return {
+    students: [],
+    books: [],
+    m_reports: [],
+    q_reports: [],
+    h_reports: [],
+    y_reports: [],
+    briefing_kits: [],
+  };
 }
 
 function paths(root: string) {
@@ -371,8 +390,9 @@ function migrateLocalDatabase(raw: unknown): { db: LocalDatabase; didMigrate: bo
   didMigrate = didMigrate || qReportsDidMigrate;
   const h_reports = Array.isArray(o.h_reports) ? (o.h_reports as LocalHReport[]) : [];
   const y_reports = Array.isArray(o.y_reports) ? (o.y_reports as LocalYReport[]) : [];
+  const briefing_kits = Array.isArray(o.briefing_kits) ? (o.briefing_kits as LocalBriefingKit[]) : [];
 
-  const db: LocalDatabase = { students, books, m_reports, q_reports, h_reports, y_reports };
+  const db: LocalDatabase = { students, books, m_reports, q_reports, h_reports, y_reports, briefing_kits };
   return { db, didMigrate };
 }
 
@@ -805,6 +825,42 @@ export function localDbDevPlugin(): Plugin {
               const saved = db.books.find((b) => b.id === id);
               saveDb(root, db);
               sendJson(res, 200, { id, row: saved });
+              return;
+            }
+
+            if (req.method === "GET" && url === "/api/local/briefing-kits") {
+              const db = loadDb(root);
+              if (!db.briefing_kits) db.briefing_kits = [];
+              const list = [...db.briefing_kits].sort(
+                (x, y) => new Date(y.created_at).getTime() - new Date(x.created_at).getTime(),
+              );
+              sendJson(res, 200, list);
+              return;
+            }
+
+            if (req.method === "POST" && url === "/api/local/briefing-kits") {
+              const raw = await readBody(req);
+              const body = JSON.parse(raw || "{}") as LocalBriefingKit;
+              if (!body.id || !body.title) {
+                sendJson(res, 400, { error: "id와 title이 필요합니다." });
+                return;
+              }
+              const db = loadDb(root);
+              if (!db.briefing_kits) db.briefing_kits = [];
+              const idx = db.briefing_kits.findIndex((k) => k.id === body.id);
+              const row: LocalBriefingKit = {
+                id: body.id,
+                title: body.title,
+                created_at: body.created_at || new Date().toISOString(),
+                reference_text: body.reference_text ?? "",
+                meta: body.meta ?? {},
+                slide_plans: body.slide_plans ?? [],
+                slides: body.slides ?? [],
+              };
+              if (idx >= 0) db.briefing_kits[idx] = row;
+              else db.briefing_kits.unshift(row);
+              saveDb(root, db);
+              sendJson(res, 201, row);
               return;
             }
 

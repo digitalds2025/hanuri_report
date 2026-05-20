@@ -1,4 +1,5 @@
 import { YES24_CLOUD_RUN_API_KEY, YES24_CLOUD_RUN_BASE_URL } from "../config/yes24CloudRun";
+import type { BriefingMaterialKit } from "./briefingMaterialTypes";
 import type { Book, Json, MonthlyReport, Student } from "./types/database";
 
 function yes24RemoteBaseUrl(): string {
@@ -232,4 +233,18 @@ export async function localUpsertBook(row: {
   const j = await parseJson<{ id?: string }>(res);
   if (!j.id || typeof j.id !== "string") throw new Error("로컬 books upsert 응답에 id가 없습니다.");
   return j.id;
+}
+
+export async function localListBriefingKits(): Promise<BriefingMaterialKit[]> {
+  const res = await fetch("/api/local/briefing-kits");
+  return parseJson<BriefingMaterialKit[]>(res);
+}
+
+export async function localSaveBriefingKit(kit: BriefingMaterialKit): Promise<void> {
+  const res = await fetch("/api/local/briefing-kits", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(kit),
+  });
+  await parseJson<unknown>(res);
 }
