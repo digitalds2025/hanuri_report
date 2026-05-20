@@ -101,11 +101,19 @@ type ReportSectionProps = {
   title: string;
   children: ReactNode;
   className?: string;
+  /** 흰색 본문 카드에 추가 클래스 (나란히 배치 시 flex-1 등) */
+  contentClassName?: string;
   /** 리본 타이틀 오른쪽 (수정 / 저장·취소)1 */
   headerRight?: ReactNode;
 };
 
-export function ReportSection({ title, children, className = "", headerRight }: ReportSectionProps) {
+export function ReportSection({
+  title,
+  children,
+  className = "",
+  contentClassName = "",
+  headerRight,
+}: ReportSectionProps) {
   return (
     <div className={`mb-10 ${className}`}>
       <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
@@ -121,7 +129,9 @@ export function ReportSection({ title, children, className = "", headerRight }: 
         ) : null}
       </div>
 
-      <div className="relative bg-white p-6 text-[15px] leading-relaxed text-gray-800 shadow-sm md:p-8">
+      <div
+        className={`relative bg-white p-6 text-[15px] leading-relaxed text-gray-800 shadow-sm md:p-8 ${contentClassName}`}
+      >
         {children}
         <div className="absolute bottom-0 right-0 h-0 w-0 border-b-[20px] border-l-[20px] border-b-transparent border-l-gray-100/50" />
         <div className="absolute bottom-0 right-0 h-5 w-5 bg-gradient-to-tl from-gray-200 to-transparent" />
@@ -305,8 +315,12 @@ export function MonthlyReportResultView({
           )}
         </ReportSection>
 
-        <div className="mb-10 grid grid-cols-1 gap-8 lg:grid-cols-2">
-          <ReportSection title={writingTitle} className="mb-0">
+        <div className="mb-10 grid grid-cols-1 gap-8 lg:grid-cols-2 lg:items-stretch">
+          <ReportSection
+            title={writingTitle}
+            className="mb-0 flex h-full flex-col"
+            contentClassName="flex flex-1 flex-col justify-center"
+          >
             <div
               className={`flex justify-center gap-4 ${writingUrls.length === 1 ? "flex-col items-center sm:flex-row" : "flex-wrap"}`}
             >
@@ -325,18 +339,27 @@ export function MonthlyReportResultView({
             </div>
           </ReportSection>
 
-          <ReportSection title={booksTitle} className="mb-0">
-            <div className="flex flex-wrap justify-center gap-6">
+          <ReportSection
+            title={booksTitle}
+            className="mb-0 flex h-full flex-col"
+            contentClassName="flex flex-1 flex-col justify-center"
+          >
+            <div
+              className={`flex justify-center gap-4 ${displayBooks.length === 1 ? "flex-col items-center sm:flex-row" : "flex-wrap"}`}
+            >
               {displayBooks.map((item, index) => (
-                <div key={index} className="flex w-1/2 min-w-[140px] max-w-[220px] flex-col items-center">
-                  <div className="mb-3 w-full border border-gray-100 bg-gray-50 p-2 shadow-sm">
+                <div
+                  key={index}
+                  className={`flex flex-col items-center ${displayBooks.length === 1 ? "w-full max-w-sm" : "w-1/2 min-w-[140px] flex-1"}`}
+                >
+                  <div className="w-full border border-gray-100 bg-gray-50 p-2 shadow-sm">
                     <img
                       src={item.image}
                       alt={`도서 ${index + 1}`}
-                      className="aspect-[3/4] h-auto w-full object-cover"
+                      className={`mx-auto w-full object-contain ${displayBooks.length === 1 ? "max-h-[220px]" : "max-h-[130px]"}`}
                     />
                   </div>
-                  <div className="flex flex-wrap justify-center gap-2">
+                  <div className="mt-2 flex flex-wrap justify-center gap-1.5">
                     {item.keywords.map((kw, i) => (
                       <span key={i} className="text-sm font-bold text-gray-700">
                         {kw.startsWith("#") ? kw : `#${kw}`}
