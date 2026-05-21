@@ -65,18 +65,27 @@ export async function fetchBookByTitleExact(title: string): Promise<Book | null>
   return null;
 }
 
-/** 도서명 부분 일치(대소문자 무시)로 최대 `limit`건 */
-export async function searchBooksByTitleSubstring(q: string, limit = 30): Promise<Book[]> {
+function bookMatchesQuery(b: Book, low: string): boolean {
+  return (
+    b.title.toLowerCase().includes(low) ||
+    b.author.toLowerCase().includes(low) ||
+    b.publisher.toLowerCase().includes(low)
+  );
+}
+
+/** 제목·저자·출판사 부분 일치(대소문자 무시)로 최대 `limit`건 */
+export async function searchBooksByQuery(q: string, limit = 30): Promise<Book[]> {
   const t = q.trim();
   if (!t) return [];
 
   if (isSupabaseConfigured()) {
     if (!supabase) return [];
     const escaped = t.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+    const pattern = `%${escaped}%`;
     const { data, error } = await supabase
       .from("books")
       .select("*")
-      .ilike("title", `%${escaped}%`)
+      .or(`title.ilike.${pattern},author.ilike.${pattern},publisher.ilike.${pattern}`)
       .order("created_at", { ascending: false })
       .limit(limit);
     if (error) throw new Error(error.message);
@@ -86,11 +95,14 @@ export async function searchBooksByTitleSubstring(q: string, limit = 30): Promis
   if (import.meta.env.DEV) {
     const list = await localListBooks();
     const low = t.toLowerCase();
-    return list.filter((b) => b.title.toLowerCase().includes(low)).slice(0, limit);
+    return list.filter((b) => bookMatchesQuery(b, low)).slice(0, limit);
   }
 
   return [];
 }
+
+/** @deprecated `searchBooksByQuery` 사용 */
+export const searchBooksByTitleSubstring = searchBooksByQuery;
 
 export function bookAiKeywordsFromRow(b: Book): string[] {
   const raw = b.ai_keywords;

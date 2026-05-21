@@ -29,11 +29,16 @@ export const MOCK_BOOKS: MockBook[] = [
   { id: "m10", title: "스스로 정리하는 공부법", author: "서태양", publisher: "다산어린이" },
 ];
 
-/** 도서명만으로 목업 DB 검색 (프로덕션 빌드 미리보기) */
-export function searchMockBooksByTitle(title: string): MockBook[] {
-  const q = title.trim().toLowerCase();
+/** 제목·저자·출판사로 목업 DB 검색 (프로덕션 빌드 미리보기) */
+export function searchMockBooksByTitle(query: string): MockBook[] {
+  const q = query.trim().toLowerCase();
   if (!q) return [];
-  return MOCK_BOOKS.filter((b) => b.title.toLowerCase().includes(q)).slice(0, 20);
+  return MOCK_BOOKS.filter(
+    (b) =>
+      b.title.toLowerCase().includes(q) ||
+      b.author.toLowerCase().includes(q) ||
+      b.publisher.toLowerCase().includes(q),
+  ).slice(0, 20);
 }
 
 export function filterMockBooks(query: string): MockBook[] {

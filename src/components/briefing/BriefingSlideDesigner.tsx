@@ -72,7 +72,7 @@ export function BriefingSlideDesigner({
               설명회 자료집 · 레이아웃
             </h1>
             <span className="text-[9px] font-black tracking-widest text-slate-400 uppercase">
-              Premium Presentation Engine
+              Evidence-Based Assembly · Gamma-style
             </span>
           </div>
         </div>

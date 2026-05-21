@@ -116,9 +116,7 @@ export function AppShell() {
         <Outlet />
       </main>
 
-      <footer className="border-t border-slate-200 bg-white py-4 text-center text-xs text-slate-500">
-        한우리독서토론논술 · 학생 표시는 별명·ID만 사용하세요.
-      </footer>
+      
     </div>
   );
 }

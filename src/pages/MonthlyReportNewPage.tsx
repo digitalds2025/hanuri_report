@@ -1,12 +1,19 @@
 import { type FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { GrowthMomentForm } from "../components/monthly/GrowthMomentForm";
-import { HanuriBookSearchProgress } from "../components/HanuriBookSearchProgress";
+import {
+  HanuriBookSearchPanel,
+  searchHitToMockBook,
+  type BookSearchHit,
+} from "../components/books/HanuriBookSearchPanel";
 import { MonthlyReportResultView } from "../components/monthly/MonthlyReportResultView";
-import { generateMonthlyReportBundle } from "../lib/geminiMonthlyBundle";
+import {
+  generateMonthlyReportBundle,
+  type MonthlyReportAITokenUsage,
+} from "../lib/geminiMonthlyBundle";
 import { compressImageToDataUrl } from "../lib/imageCompress";
 import { competencyAnalysisToMReportComments } from "../lib/competencyAnalysisSplit";
-import { searchMockBooksByTitle, type MockBook } from "../lib/mockBooks";
+import type { MockBook } from "../lib/mockBooks";
 import { useMonthlyReports } from "../hooks/useMonthlyReports";
 import {
   buildMonthlyGrowthMetaJson,
@@ -17,14 +24,9 @@ import {
 import { bookKeywordsToDisplayItems, reportHeaderTitle } from "../lib/monthlyReportDisplay";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 import { uploadWritingImageForStudent } from "../lib/writingImageStorage";
-import {
-  bookRowToMockBook,
-  fetchBookByTitleExact,
-  refreshMockBookAiFromDb,
-  searchBooksByTitleSubstring,
-} from "../lib/fetchBookByTitle";
-import { isYes24SearchAvailable, localSaveMonthlyReport, localYes24SearchBook } from "../lib/localStoreApi";
-import { bookUpsertInputFromYes24, persistBookUpsertRow } from "../lib/persistBookUpsert";
+import { fetchBookById, refreshMockBookAiFromDb } from "../lib/fetchBookByTitle";
+import type { MonthlyReportBookContext } from "../lib/geminiMonthlyBundle";
+import { localSaveMonthlyReport } from "../lib/localStoreApi";
 import { pickStrengthWeaknessPointsForReport } from "../lib/pillarStrengthWeakness";
 import { stripAiPlainText } from "../lib/reportPlainText";
 import type { Json, MonthlyReport } from "../lib/types/database";
@@ -83,15 +85,6 @@ function bookSelectionKey(b: MockBook): string {
   const sid = typeof b.id === "string" ? b.id.trim() : "";
   if (sid) return `id:${sid}`;
   return `tp:${b.title}|${b.publisher}|${b.author}`;
-}
-
-/** YES24/DB에서 온 `ai_keywords`를 표시용 문자열 배열로 정리 */
-function mockBookAiKeywordsForDisplay(b: MockBook): string[] {
-  const raw = b.ai_keywords;
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .filter((x): x is string => typeof x === "string" && x.trim().length > 0)
-    .map((x) => x.trim());
 }
 
 /** `m_reports.book_keywords` + (선택) `growth_meta`의 도서 메타 → 마법사 `selectedBooks` 복원 */
@@ -200,18 +193,9 @@ export function MonthlyReportNewPage() {
   const imageDragDepth = useRef(0);
   const writingFileInputRef = useRef<HTMLInputElement>(null);
 
-  const [bookSearchTitle, setBookSearchTitle] = useState("");
-  const [bookSearchAuthorOrTranslator, setBookSearchAuthorOrTranslator] = useState("");
-  const [bookSearchPublisher, setBookSearchPublisher] = useState("");
-  const [bookSearchResults, setBookSearchResults] = useState<MockBook[] | null>(null);
-  const [bookSearchError, setBookSearchError] = useState<string | null>(null);
-  const [bookSearchBusy, setBookSearchBusy] = useState(false);
-  const [yes24Logs, setYes24Logs] = useState<string[]>([]);
-  const yes24LogEndRef = useRef<HTMLDivElement>(null);
   const [selectedBooks, setSelectedBooks] = useState<MockBook[]>([]);
   const selectedBooksRef = useRef<MockBook[]>([]);
   selectedBooksRef.current = selectedBooks;
-  const [yes24Busy, setYes24Busy] = useState(false);
 
   const [scores, setScores] = useState<Record<PillarKey, number>>(
     () => Object.fromEntries(KEYS.map((k) => [k, 5])) as Record<PillarKey, number>,
@@ -225,6 +209,7 @@ export function MonthlyReportNewPage() {
   const [teacherNote, setTeacherNote] = useState("");
 
   const [aiBusy, setAiBusy] = useState(false);
+  const [aiTokenUsage, setAiTokenUsage] = useState<MonthlyReportAITokenUsage | null>(null);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
@@ -299,118 +284,16 @@ export function MonthlyReportNewPage() {
     setSelectedBooks(mockBooksFromSavedBookKeywords(rep, fb));
 
     setWizardStep(6);
+    setAiTokenUsage(null);
     setMsg(null);
   }, [studentId, yearMonth, savedMonthlyReports, savedMonthlyLoading, searchParams]);
 
-  async function runDbTitleSearch() {
-    const title = bookSearchTitle.trim();
-    if (!title) {
-      setBookSearchError("도서명을 입력해 주세요.");
-      return;
-    }
-    setBookSearchError(null);
-    setBookSearchBusy(true);
-    setYes24Logs([]);
-    try {
-      let rows: MockBook[];
-      if (isSupabaseConfigured() && supabase) {
-        const books = await searchBooksByTitleSubstring(title);
-        rows = books.map(bookRowToMockBook);
-      } else if (import.meta.env.DEV) {
-        const books = await searchBooksByTitleSubstring(title);
-        rows = books.map(bookRowToMockBook);
-      } else {
-        rows = searchMockBooksByTitle(title);
-      }
-      setBookSearchResults(rows);
-    } catch (e) {
-      setBookSearchError(e instanceof Error ? e.message : String(e));
-      setBookSearchResults([]);
-    } finally {
-      setBookSearchBusy(false);
-    }
-  }
-
-  async function runYes24RegisterBook() {
-    if (!isYes24SearchAvailable()) {
-      setBookSearchError(
-        "이 사이트에서는 YES24 자동 등록을 사용할 수 없습니다.",
-      );
-      return;
-    }
-    const title = bookSearchTitle.trim();
-    const publisher = bookSearchPublisher.trim();
-    const person = bookSearchAuthorOrTranslator.trim();
-    if (!title || !publisher || !person) {
-      setBookSearchError("도서명·출판사·저자/역자를 모두 입력한 뒤 등록해 주세요.");
-      return;
-    }
-    setBookSearchError(null);
-    setYes24Busy(true);
-    setYes24Logs([]);
-    try {
-      const existing = await fetchBookByTitleExact(title);
-      if (existing) {
-        const cached = bookRowToMockBook(existing);
-        setYes24Logs(["이 도서명은 이미 도서함에 있어요. 아래 목록에서 선택해 주세요."]);
-        setBookSearchResults([cached]);
-        return;
-      }
-      const r = await localYes24SearchBook(
-        { title, author: person, publisher },
-        {
-          onLog: (message) => {
-            setYes24Logs((prev) => [...prev, message]);
-          },
-        },
-      );
-      const persisted = await persistBookUpsertRow(bookUpsertInputFromYes24(r));
-      const dbBookId = persisted.ok ? persisted.book_id : null;
-      if (!persisted.ok) {
-        setYes24Logs((prev) => [...prev, `도서함에 넣는 중에 잠깐 문제가 생겼어요. (${persisted.error})`]);
-      } else {
-        setYes24Logs((prev) => [...prev, "도서함에 잘 넣어두었어요!"]);
-      }
-      let row: MockBook = {
-        id: `yes24-${Date.now()}`,
-        db_book_id: dbBookId,
-        title: r.title,
-        author: r.author,
-        publisher: r.publisher,
-        url: r.url,
-        cover_url: r.cover_url ?? null,
-        category: r.category,
-        introduce: r.introduce,
-        author_cmt: r.author_cmt,
-        pub_cmt: r.pub_cmt,
-        ai_category: r.ai_category,
-        ai_keywords: r.ai_keywords,
-      };
-      if (dbBookId) {
-        try {
-          row = await refreshMockBookAiFromDb(row);
-        } catch (e) {
-          setYes24Logs((prev) => [
-            ...prev,
-            `도서함에 저장된 분류·키워드를 불러오지 못했어요. (${e instanceof Error ? e.message : String(e)})`,
-          ]);
-        }
-      }
-      setBookSearchResults((prev) => {
-        const list = prev ?? [];
-        const withoutDup = list.filter((b) => b.id !== row.id);
-        return [row, ...withoutDup];
-      });
-    } catch (e) {
-      setBookSearchError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setYes24Busy(false);
-    }
+  function isBookSearchHitSelected(hit: BookSearchHit) {
+    return selectedBooks.some((s) => bookSelectionKey(s) === hit.key);
   }
 
   async function toggleResultBookSelection(b: MockBook) {
     const key = bookSelectionKey(b);
-    setBookSearchError(null);
 
     const prev = selectedBooksRef.current;
     const idx = prev.findIndex((x) => bookSelectionKey(x) === key);
@@ -425,13 +308,9 @@ export function MonthlyReportNewPage() {
       try {
         toAdd = await refreshMockBookAiFromDb(b);
       } catch (e) {
-        setBookSearchError(e instanceof Error ? e.message : String(e));
+        setMsg(e instanceof Error ? e.message : String(e));
         return;
       }
-      setBookSearchResults((list) => {
-        if (!list) return list;
-        return list.map((x) => (bookSelectionKey(x) === key ? toAdd : x));
-      });
     }
 
     setSelectedBooks((p) => {
@@ -528,22 +407,6 @@ export function MonthlyReportNewPage() {
   const canGoNextFrom4 = KEYS.every((k) => pillarComments[k]?.trim());
   const canGenerateFrom5 = warmDraft.trim().length > 0 && canGoNextFrom1 && canGoNextFrom2 && canGoNextFrom3 && canGoNextFrom4;
 
-  const titleSearchReady = Boolean(bookSearchTitle.trim());
-  const yes24FormReady = Boolean(
-    bookSearchTitle.trim() && bookSearchPublisher.trim() && bookSearchAuthorOrTranslator.trim(),
-  );
-
-  /** 도서명만 바꿀 때는 검색 결과만 초기화 — 이미 고른 책은 유지 */
-  useEffect(() => {
-    setBookSearchResults(null);
-    setBookSearchError(null);
-    setYes24Logs([]);
-  }, [bookSearchTitle]);
-
-  useEffect(() => {
-    yes24LogEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [yes24Logs]);
-
   const onPickFiles = useCallback(
     async (fileList: FileList | null) => {
       if (!fileList?.length) return;
@@ -597,20 +460,42 @@ export function MonthlyReportNewPage() {
     setImageErr(null);
   }
 
+  async function bookContextForAi(primary: MockBook): Promise<MonthlyReportBookContext> {
+    const bid = primary.db_book_id?.trim();
+    if (bid) {
+      const row = await fetchBookById(bid);
+      if (row) {
+        return {
+          title: row.title,
+          author: row.author,
+          publisher: row.publisher,
+          introduce: row.introduce,
+          author_cmt: row.author_cmt,
+          pub_cmt: row.pub_cmt,
+        };
+      }
+    }
+    return {
+      title: primary.title,
+      author: primary.author,
+      publisher: primary.publisher,
+      introduce: primary.introduce ?? null,
+      author_cmt: primary.author_cmt ?? null,
+      pub_cmt: primary.pub_cmt ?? null,
+    };
+  }
+
   async function runReportGeneration() {
     const primary = selectedBooks[0];
     if (!primary) return;
     setMsg(null);
     setAiBusy(true);
     try {
+      const book = await bookContextForAi(primary);
       const bundle = await generateMonthlyReportBundle({
         growthMeta,
         writingImageNote,
-        book: {
-          title: primary.title,
-          author: primary.author,
-          publisher: primary.publisher,
-        },
+        book,
         scores,
         pillarComments,
         warmMessageDraft: warmDraft,
@@ -618,6 +503,7 @@ export function MonthlyReportNewPage() {
       setGrowth(bundle.growthMoment);
       setCompetencyAnalysis(bundle.competencyAnalysis);
       setTeacherNote(bundle.warmMessage);
+      setAiTokenUsage(bundle.tokenUsage);
       setWizardStep(6);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
@@ -1002,160 +888,15 @@ export function MonthlyReportNewPage() {
             
 
             <div className="flex flex-col gap-5 lg:flex-row lg:items-stretch">
-              <div className="min-w-0 flex-1 space-y-4">
-                <label className="block text-sm">
-                  <span className="text-slate-700">도서명</span>
-                  <span className="text-red-500"> *</span>
-                  <input
-                    className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
-                    value={bookSearchTitle}
-                    onChange={(e) => setBookSearchTitle(e.target.value)}
-                    placeholder="예: 마음의 온도"
-                    autoComplete="off"
-                  />
-                </label>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
-                    disabled={!titleSearchReady || bookSearchBusy || yes24Busy}
-                    onClick={() => void runDbTitleSearch()}
-                  >
-                    {bookSearchBusy ? "검색 중…" : "검색"}
-                  </button>
-                  
-                </div>
-
-                {bookSearchResults !== null && bookSearchResults.length === 0 && !bookSearchError ? (
-                  <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-sm text-amber-950">
-                    <p>
-                      도서함에 같은 제목이 없습니다. YES24 검색에 맞게 <strong>출판사</strong>와{" "}
-                      <strong>저자 또는 역자</strong>를 입력한 뒤 아래 버튼으로 등록해 주세요.
-                    </p>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <label className="block text-sm">
-                        <span className="text-slate-800">출판사</span>
-                        <span className="text-red-500"> *</span>
-                        <input
-                          className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                          value={bookSearchPublisher}
-                          onChange={(e) => setBookSearchPublisher(e.target.value)}
-                          placeholder="예: 문학동네"
-                          autoComplete="off"
-                        />
-                      </label>
-                      <label className="block text-sm">
-                        <span className="text-slate-800">저자 / 역자</span>
-                        <span className="text-red-500"> *</span>
-                        <input
-                          className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
-                          value={bookSearchAuthorOrTranslator}
-                          onChange={(e) => setBookSearchAuthorOrTranslator(e.target.value)}
-                          placeholder="검색할 한 명만 입력"
-                          autoComplete="off"
-                        />
-                      </label>
-                    </div>
-                    {isYes24SearchAvailable() ? (
-                      <button
-                        type="button"
-                        className="rounded-lg bg-amber-700 px-4 py-2 text-sm font-medium text-white hover:bg-amber-800 disabled:opacity-50"
-                        disabled={!yes24FormReady || bookSearchBusy || yes24Busy}
-                        onClick={() => void runYes24RegisterBook()}
-                      >
-                        {yes24Busy ? "YES24 처리 중…" : "YES24에서 도서 등록"}
-                      </button>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {bookSearchError ? <p className="text-sm text-red-600 whitespace-pre-wrap">{bookSearchError}</p> : null}
-
-                {yes24Logs.length > 0 || yes24Busy ? (
-                  <div className="space-y-2">
-                    <HanuriBookSearchProgress messages={yes24Logs} active={yes24Busy || bookSearchBusy} />
-                    <div ref={yes24LogEndRef} />
-                  </div>
-                ) : null}
-
-                {bookSearchResults === null ? (
-                  <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50/80 px-3 py-4 text-center text-sm text-slate-500">
-                    도서명을 입력한 뒤 「검색」을 누르면 결과가 여기에 표시됩니다.
-                  </p>
-                ) : bookSearchResults.length > 0 ? (
-                  <ul className="max-h-[28rem] space-y-2 overflow-y-auto rounded-lg border border-slate-100 bg-slate-50/80 p-2">
-                    {bookSearchResults.map((b, ri) => {
-                      const on = selectedBooks.some((s) => bookSelectionKey(s) === bookSelectionKey(b));
-                      const atCapacity = selectedBooks.length >= MAX_SELECTED_BOOKS;
-                      const disabledPick = atCapacity && !on;
-                      const kw = mockBookAiKeywordsForDisplay(b);
-                      const cat = (b.ai_category ?? "").trim();
-                      return (
-                        <li key={`${bookSelectionKey(b)}-${ri}`}>
-                          <button
-                            type="button"
-                            disabled={disabledPick}
-                            onClick={() => void toggleResultBookSelection(b)}
-                            title={disabledPick ? `최대 ${MAX_SELECTED_BOOKS}권까지 선택할 수 있습니다.` : undefined}
-                            className={
-                              on
-                                ? "flex w-full gap-3 rounded-lg border border-indigo-500 bg-indigo-50 p-2 text-left text-sm shadow-sm disabled:opacity-100"
-                                : "flex w-full gap-3 rounded-lg border border-transparent bg-white/90 p-2 text-left text-sm hover:border-slate-200 hover:bg-white disabled:cursor-not-allowed disabled:opacity-50"
-                            }
-                          >
-                            <div className="shrink-0">
-                              {b.cover_url ? (
-                                <img
-                                  src={b.cover_url}
-                                  alt=""
-                                  className="h-[5.5rem] w-[3.75rem] rounded border border-slate-200 object-cover"
-                                />
-                              ) : (
-                                <div className="flex h-[5.5rem] w-[3.75rem] items-center justify-center rounded border border-dashed border-slate-300 bg-slate-100 text-center text-[10px] leading-tight text-slate-500">
-                                  표지 없음
-                                </div>
-                              )}
-                            </div>
-                            <div className="min-w-0 flex-1 space-y-1">
-                              <p className="font-medium leading-snug text-slate-900">{b.title}</p>
-                              <p className="text-xs text-slate-600">
-                                <span className="text-slate-500">저자</span> {b.author}
-                              </p>
-                              <p className="text-xs text-slate-600">
-                                <span className="text-slate-500">출판사</span> {b.publisher}
-                              </p>
-                              <p className="text-xs text-slate-600">
-                                <span className="text-slate-500">AI 분류</span>{" "}
-                                {cat ? (
-                                  <span className="text-slate-800">{cat}</span>
-                                ) : (
-                                  <span className="text-slate-400">—</span>
-                                )}
-                              </p>
-                              <div className="flex flex-wrap gap-1 pt-0.5">
-                                <span className="sr-only">AI 키워드</span>
-                                {kw.length ? (
-                                  kw.map((k, j) => (
-                                    <span
-                                      key={`${bookSelectionKey(b)}-kw-${j}`}
-                                      className="inline-block max-w-full truncate rounded-full bg-slate-200/90 px-2 py-0.5 text-[11px] text-slate-800"
-                                      title={k}
-                                    >
-                                      {k}
-                                    </span>
-                                  ))
-                                ) : (
-                                  <span className="text-[11px] text-slate-400">AI 키워드 없음</span>
-                                )}
-                              </div>
-                            </div>
-                          </button>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : null}
+              <div className="min-w-0 flex-1">
+                <HanuriBookSearchPanel
+                  onResultClick={(hit) => void toggleResultBookSelection(searchHitToMockBook(hit))}
+                  isResultSelected={isBookSearchHitSelected}
+                  isResultClickDisabled={(hit) =>
+                    selectedBooks.length >= MAX_SELECTED_BOOKS && !isBookSearchHitSelected(hit)
+                  }
+                  resultClickDisabledTitle={`최대 ${MAX_SELECTED_BOOKS}권까지 선택할 수 있습니다.`}
+                />
               </div>
 
               <aside className="flex w-full shrink-0 flex-col border-t border-slate-200 pt-4 lg:w-[11.5rem] lg:border-l lg:border-t-0 lg:pl-5 lg:pt-0 xl:w-[13rem]">
@@ -1314,8 +1055,17 @@ export function MonthlyReportNewPage() {
         {wizardStep === 6 ? (
           <div className="space-y-4">
             <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-900">
-              아래는 AI가 채운 리포트 미리보기입니다. 각 섹션 하단에서 수정할 수 있으며, 수정 내용은{" "}
-              <strong>월간 리포트 저장</strong> 시 함께 저장됩니다.
+              <p>
+                아래는 AI가 채운 리포트 미리보기입니다. 각 섹션 하단에서 수정할 수 있으며, 수정 내용은{" "}
+                <strong>월간 리포트 저장</strong> 시 함께 저장됩니다.
+              </p>
+              {aiTokenUsage ? (
+                <p className="mt-1.5 text-xs text-emerald-800/90">
+                  Gemini 토큰 (리포트 생성 3회 합계) — 입력{" "}
+                  {aiTokenUsage.inputTokens.toLocaleString("ko-KR")} · 출력{" "}
+                  {aiTokenUsage.outputTokens.toLocaleString("ko-KR")}
+                </p>
+              ) : null}
             </div>
 
             <MonthlyReportResultView

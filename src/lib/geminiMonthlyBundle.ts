@@ -3,21 +3,76 @@ import type { PillarKey } from "./reportAggregates";
 import { pillarLabelsKo } from "./reportAggregates";
 import { stripAiPlainText } from "./reportPlainText";
 
+export type MonthlyReportBookContext = {
+  title: string;
+  author: string;
+  publisher: string;
+  introduce?: string | null;
+  author_cmt?: string | null;
+  pub_cmt?: string | null;
+};
+
 export type MonthlyReportAIContext = {
   growthMeta: GrowthMetaState;
   /** 글쓰기 이미지 유무·URL 요약 (텍스트 컨텍스트용) */
   writingImageNote: string;
-  book: { title: string; author: string; publisher: string };
+  book: MonthlyReportBookContext;
   scores: Record<PillarKey, number>;
   pillarComments: Record<PillarKey, string>;
   warmMessageDraft: string;
+};
+
+function clipBookText(value: string | null | undefined, maxLen: number): string {
+  const t = (value ?? "").trim();
+  if (!t) return "(없음)";
+  if (t.length <= maxLen) return t;
+  return `${t.slice(0, maxLen)}…`;
+}
+
+function bookContextSection(book: MonthlyReportBookContext): string {
+  return `[선택 도서]
+제목: ${book.title}
+저자: ${book.author}
+출판사: ${book.publisher}
+
+[책 소개]
+${clipBookText(book.introduce, 12000)}
+
+[만든이·저자 코멘트]
+${clipBookText(book.author_cmt, 8000)}
+
+[출판사 리뷰]
+${clipBookText(book.pub_cmt, 8000)}`;
+}
+
+export type MonthlyReportAITokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
 };
 
 export type MonthlyReportAIResult = {
   growthMoment: string;
   competencyAnalysis: string;
   warmMessage: string;
+  tokenUsage: MonthlyReportAITokenUsage;
 };
+
+type GeminiGenerateResult = {
+  text: string;
+  promptTokenCount: number;
+  candidatesTokenCount: number;
+};
+
+function readUsageMetadata(data: unknown): { prompt: number; candidates: number } {
+  const meta = (data as { usageMetadata?: Record<string, unknown> } | null)?.usageMetadata;
+  if (!meta || typeof meta !== "object") return { prompt: 0, candidates: 0 };
+  const prompt = meta.promptTokenCount;
+  const candidates = meta.candidatesTokenCount;
+  return {
+    prompt: typeof prompt === "number" && Number.isFinite(prompt) ? prompt : 0,
+    candidates: typeof candidates === "number" && Number.isFinite(candidates) ? candidates : 0,
+  };
+}
 
 function getApiKey(): string {
   return (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim() ?? "";
@@ -28,7 +83,7 @@ function getModel(): string {
   return m || "gemini-2.0-flash";
 }
 
-async function geminiGenerateText(prompt: string, temperature = 0.55): Promise<string> {
+async function geminiGenerateText(prompt: string, temperature = 0.55): Promise<GeminiGenerateResult> {
   const key = getApiKey();
   if (!key) {
     throw new Error("VITE_GEMINI_API_KEY 가 .env 에 설정되어 있지 않습니다.");
@@ -76,12 +131,17 @@ async function geminiGenerateText(prompt: string, temperature = 0.55): Promise<s
     throw new Error(`프롬프트 차단: ${d.promptFeedback.blockReason}`);
   }
 
+  const usage = readUsageMetadata(data);
   const text = d.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   const trimmed = text.trim();
   if (!trimmed) {
     throw new Error("Gemini가 빈 텍스트를 반환했습니다.");
   }
-  return stripAiPlainText(trimmed);
+  return {
+    text: stripAiPlainText(trimmed),
+    promptTokenCount: usage.prompt,
+    candidatesTokenCount: usage.candidates,
+  };
 }
 
 function contextBlock(ctx: MonthlyReportAIContext): string {
@@ -91,7 +151,7 @@ function contextBlock(ctx: MonthlyReportAIContext): string {
   const scoreLines = (["reading", "thinking", "discussion", "writing", "growth"] as const)
     .map((k) => `- ${pillarLabelsKo[k]}: ${ctx.scores[k]}점 — 교사 코멘트: ${ctx.pillarComments[k]?.trim() || "(없음)"}`)
     .join("\n");
-  return `[1단 활동 — 무엇을 했는가]\n${s1}\n\n[2단 태도·행동]\n${s2}\n\n[3단 교사 메모]\n${s3}\n\n[이달의 글쓰기]\n${ctx.writingImageNote}\n\n[선택 도서]\n제목: ${ctx.book.title}\n저자: ${ctx.book.author}\n출판사: ${ctx.book.publisher}\n\n[5대 역량 점수·코멘트]\n${scoreLines}\n\n[선생님이 적은 따뜻한 한마디 초안]\n${ctx.warmMessageDraft.trim() || "(없음)"}`;
+  return `[1단 활동 — 무엇을 했는가]\n${s1}\n\n[2단 태도·행동]\n${s2}\n\n[3단 교사 메모]\n${s3}\n\n[이달의 글쓰기]\n${ctx.writingImageNote}\n\n${bookContextSection(ctx.book)}\n\n[5대 역량 점수·코멘트]\n${scoreLines}\n\n[선생님이 적은 따뜻한 한마디 초안]\n${ctx.warmMessageDraft.trim() || "(없음)"}`;
 }
 
 function promptGrowthMoment(ctx: MonthlyReportAIContext): string {
@@ -145,10 +205,19 @@ ${contextBlock(ctx)}
 export async function generateMonthlyReportBundle(
   ctx: MonthlyReportAIContext,
 ): Promise<MonthlyReportAIResult> {
-  const [growthMoment, competencyAnalysis, warmMessage] = await Promise.all([
+  const [growthRes, competencyRes, warmRes] = await Promise.all([
     geminiGenerateText(promptGrowthMoment(ctx), 0.62),
     geminiGenerateText(promptCompetency(ctx), 0.5),
     geminiGenerateText(promptWarm(ctx), 0.68),
   ]);
-  return { growthMoment, competencyAnalysis, warmMessage };
+  const parts = [growthRes, competencyRes, warmRes];
+  return {
+    growthMoment: growthRes.text,
+    competencyAnalysis: competencyRes.text,
+    warmMessage: warmRes.text,
+    tokenUsage: {
+      inputTokens: parts.reduce((sum, p) => sum + p.promptTokenCount, 0),
+      outputTokens: parts.reduce((sum, p) => sum + p.candidatesTokenCount, 0),
+    },
+  };
 }

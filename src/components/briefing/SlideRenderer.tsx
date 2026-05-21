@@ -212,6 +212,49 @@ export function SlideRenderer({ slide }: SlideRendererProps) {
           <cite className="text-xl font-bold text-indigo-600 not-italic">— {str(slide.author)}</cite>
         </div>
       );
+    case "INSTRUCTOR_INSIGHT": {
+      const prompts = strArr(slide.prompts);
+      return (
+        <div className={[baseClasses, "bg-amber-50 border-amber-200"].join(" ")}>
+          <div className="mb-6 inline-flex rounded-full bg-amber-400 px-4 py-1 text-xs font-black uppercase tracking-wider text-amber-950">
+            강사 인사이트 보강
+          </div>
+          <h2 className="text-3xl font-bold mb-8 text-amber-950">{str(slide.title)}</h2>
+          <ul className="space-y-4 flex-grow overflow-y-auto briefing-scrollbar">
+            {prompts.map((p, i) => (
+              <li
+                key={i}
+                className="rounded-2xl border-2 border-dashed border-amber-300 bg-white/80 p-6 text-lg font-medium text-amber-900"
+              >
+                {p}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-6 text-sm text-amber-700/80">
+            현장 노하우를 채워 넣으면 설명회 자료의 마지막 2% 차별화가 완성됩니다.
+          </p>
+        </div>
+      );
+    }
+    case "SOURCES": {
+      const items = strArr(slide.items);
+      return (
+        <div className={[baseClasses, "bg-slate-50"].join(" ")}>
+          <h2 className="text-2xl font-bold mb-4 text-slate-800">{str(slide.title) || "참고 및 기준 시점"}</h2>
+          <p className="mb-8 text-lg font-semibold text-indigo-700">
+            지역 자료 기준 시점: {str(slide.dataAsOf) || "—"}
+          </p>
+          <ul className="space-y-3 text-sm text-slate-600 flex-grow overflow-y-auto briefing-scrollbar">
+            {items.map((item, i) => (
+              <li key={i} className="flex gap-2">
+                <span className="text-indigo-400">•</span>
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      );
+    }
     default:
       return <div className="p-10 bg-red-50 text-red-600">지원하지 않는 레이아웃</div>;
   }
