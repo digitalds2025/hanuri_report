@@ -1,4 +1,8 @@
-import { geminiGenerateWithGoogleSearch, parseJsonFromModelText } from "./geminiClient";
+import {
+  geminiGenerateWithGoogleSearch,
+  parseJsonFromModelText,
+  type GeminiTokenUsage,
+} from "./geminiClient";
 import {
   buildFullKeywordPool,
   buildSearchKeywordBatches,
@@ -124,6 +128,35 @@ function mergeSourceLinks(
   }
 }
 
+function safeParseScanBatch(text: string, batchLabel: string): BatchParseResult {
+  try {
+    return parseJsonFromModelText<BatchParseResult>(text);
+  } catch {
+    try {
+      const schoolsMatch = text.match(/"discoveredSchools"\s*:\s*(\[[\s\S]*?\])/);
+      const factsMatch = text.match(/"facts"\s*:\s*(\[[\s\S]*?\])\s*(?:,|\})/);
+      const partial: BatchParseResult = { discoveredSchools: [], facts: [] };
+      if (schoolsMatch?.[1]) {
+        partial.discoveredSchools = JSON.parse(repairJsonSlice(schoolsMatch[1])) as string[];
+      }
+      if (factsMatch?.[1]) {
+        partial.facts = JSON.parse(repairJsonSlice(factsMatch[1])) as BatchParseResult["facts"];
+      }
+      if ((partial.facts?.length ?? 0) > 0 || (partial.discoveredSchools?.length ?? 0) > 0) {
+        return partial;
+      }
+    } catch {
+      /* fall through */
+    }
+    console.warn(`[공식 스캔] JSON 파싱 실패 — ${batchLabel}, 해당 청크는 건너뜁니다.`);
+    return { discoveredSchools: [], facts: [], summary: "" };
+  }
+}
+
+function repairJsonSlice(s: string): string {
+  return s.replace(/,\s*([}\]])/g, "$1");
+}
+
 async function runScanBatch(
   batch: SearchKeywordBatch,
   input: BriefingMaterialFormInput,
@@ -134,10 +167,12 @@ async function runScanBatch(
   parsed: BatchParseResult;
   queries: string[];
   chunks: { title?: string; uri?: string }[];
+  usage: GeminiTokenUsage;
 }> {
   const merged: BatchParseResult = { discoveredSchools: [], facts: [] };
   const allQueries: string[] = [];
   const allChunks: { title?: string; uri?: string }[] = [];
+  let usage: GeminiTokenUsage = { inputTokens: 0, outputTokens: 0 };
   const card = getRegionProfile(input.subRegion, input.region);
   const queryChunks = chunkQueries(batch.queries);
 
@@ -159,14 +194,18 @@ async function runScanBatch(
       "키워드별로 facts를 최대한 많이. sourceExcerpt는 요약하지 말고 원문을 길게. JSON만 출력.",
     ].join("\n");
 
-    const { text, grounding } = await geminiGenerateWithGoogleSearch(
+    const { text, grounding, usage: chunkUsage } = await geminiGenerateWithGoogleSearch(
       SCAN_SYSTEM,
       userPrompt,
       0.15,
       "research",
       16384,
     );
-    const parsed = parseJsonFromModelText<BatchParseResult>(text);
+    usage = {
+      inputTokens: usage.inputTokens + chunkUsage.inputTokens,
+      outputTokens: usage.outputTokens + chunkUsage.outputTokens,
+    };
+    const parsed = safeParseScanBatch(text, batch.label);
     allQueries.push(...grounding.webSearchQueries);
     allChunks.push(...grounding.groundingChunks);
     merged.discoveredSchools = mergeUniqueSchools(
@@ -180,6 +219,7 @@ async function runScanBatch(
     parsed: merged,
     queries: allQueries,
     chunks: allChunks,
+    usage,
   };
 }
 
@@ -263,6 +303,7 @@ async function processScanBatches(
   allFacts: OfficialDataScanResult["facts"],
   summaries: string[],
   batchesRun: SearchKeywordBatch[],
+  tokenUsage: GeminiTokenUsage,
   onProgress?: (p: ScanProgress) => void,
   phaseLabel = "공식 데이터 스캔",
 ): Promise<string[]> {
@@ -275,13 +316,15 @@ async function processScanBatches(
       queryCount: batch.queries.length,
     });
     batchesRun.push(batch);
-    const { parsed, queries, chunks } = await runScanBatch(
+    const { parsed, queries, chunks, usage } = await runScanBatch(
       batch,
       input,
       regionName,
       schools,
       attachmentExcerpt,
     );
+    tokenUsage.inputTokens += usage.inputTokens;
+    tokenUsage.outputTokens += usage.outputTokens;
     allQueries.push(...queries);
     mergeSourceLinks(sourceMap, chunks);
     schools = mergeUniqueSchools(schools, parsed.discoveredSchools ?? []);
@@ -312,6 +355,7 @@ export async function scanOfficialDataWithBatches(
   const summaries: string[] = [];
   const batchesRun: SearchKeywordBatch[] = [];
   const attachmentExcerpt = attachmentText.trim();
+  let tokenUsage: GeminiTokenUsage = { inputTokens: 0, outputTokens: 0 };
 
   onProgress?.({ phase: "Data Layer · 지역·공식 포털 스캔" });
   discoveredSchools = await processScanBatches(
@@ -325,6 +369,7 @@ export async function scanOfficialDataWithBatches(
     allFacts,
     summaries,
     batchesRun,
+    tokenUsage,
     onProgress,
   );
 
@@ -348,6 +393,7 @@ export async function scanOfficialDataWithBatches(
       allFacts,
       summaries,
       batchesRun,
+      tokenUsage,
       onProgress,
       "학교명 기반 심화 검색",
     );
@@ -378,6 +424,7 @@ export async function scanOfficialDataWithBatches(
     summaries,
     digestText,
     scanScope: scopeNote,
+    tokenUsage,
   };
 }
 

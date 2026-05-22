@@ -4,6 +4,11 @@ export type GeminiGroundingMeta = {
   groundingChunks: GeminiGroundingChunk[];
 };
 
+export type GeminiTokenUsage = {
+  inputTokens: number;
+  outputTokens: number;
+};
+
 export function getGeminiApiKey(): string {
   return (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim() ?? "";
 }
@@ -50,6 +55,11 @@ type GenerateContentResponse = {
     };
   }[];
   promptFeedback?: { blockReason?: string };
+  usageMetadata?: {
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
+  };
 };
 
 function parseGeminiResponse(raw: string, resOk: boolean): GenerateContentResponse {
@@ -70,9 +80,20 @@ function parseGeminiResponse(raw: string, resOk: boolean): GenerateContentRespon
   }
 }
 
+export function readGeminiTokenUsage(data: GenerateContentResponse): GeminiTokenUsage {
+  const meta = data.usageMetadata;
+  const input = meta?.promptTokenCount;
+  const output = meta?.candidatesTokenCount;
+  return {
+    inputTokens: typeof input === "number" && Number.isFinite(input) ? input : 0,
+    outputTokens: typeof output === "number" && Number.isFinite(output) ? output : 0,
+  };
+}
+
 function extractTextAndGrounding(data: GenerateContentResponse): {
   text: string;
   grounding: GeminiGroundingMeta;
+  usage: GeminiTokenUsage;
 } {
   if (data.promptFeedback?.blockReason) {
     throw new Error(`프롬프트 차단: ${data.promptFeedback.blockReason}`);
@@ -91,6 +112,7 @@ function extractTextAndGrounding(data: GenerateContentResponse): {
       webSearchQueries: gm?.webSearchQueries ?? [],
       groundingChunks,
     },
+    usage: readGeminiTokenUsage(data),
   };
 }
 
@@ -100,7 +122,7 @@ export async function geminiGenerateText(
   temperature = 0.4,
   role: GeminiRole = "writer",
   maxOutputTokens = 8192,
-): Promise<string> {
+): Promise<{ text: string; usage: GeminiTokenUsage }> {
   const key = getGeminiApiKey();
   if (!key) throw new Error("VITE_GEMINI_API_KEY 가 .env 에 설정되어 있지 않습니다.");
   const model = resolveModel(role);
@@ -115,9 +137,22 @@ export async function geminiGenerateText(
     }),
   });
 
-  const { text } = extractTextAndGrounding(parseGeminiResponse(await res.text(), res.ok));
+  const parsed = parseGeminiResponse(await res.text(), res.ok);
+  const { text, usage } = extractTextAndGrounding(parsed);
   if (!text) throw new Error("Gemini가 빈 응답을 반환했습니다.");
-  return text;
+  return { text, usage };
+}
+
+function shouldRetryWithResearchModel(role: GeminiRole, err: unknown): boolean {
+  if (role !== "writer") return false;
+  const writer = getGeminiWriterModel();
+  const research = getGeminiResearchModel();
+  if (writer === research) return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /not found|404|invalid model|does not exist|unsupported/i.test(msg) ||
+    /Gemini API 오류/i.test(msg)
+  );
 }
 
 export async function geminiGenerateJson<T>(
@@ -126,35 +161,43 @@ export async function geminiGenerateJson<T>(
   temperature = 0.35,
   role: GeminiRole = "writer",
   maxOutputTokens = 8192,
-): Promise<T> {
+): Promise<{ data: T; usage: GeminiTokenUsage }> {
   const key = getGeminiApiKey();
   if (!key) throw new Error("VITE_GEMINI_API_KEY 가 .env 에 설정되어 있지 않습니다.");
-  const model = resolveModel(role);
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      contents: [{ parts: [{ text: userPrompt }] }],
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      generationConfig: {
-        temperature,
-        maxOutputTokens,
-        responseMimeType: "application/json",
-      },
-    }),
-  });
+  async function call(modelRole: GeminiRole): Promise<{ data: T; usage: GeminiTokenUsage }> {
+    const model = resolveModel(modelRole);
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
 
-  const { text } = extractTextAndGrounding(parseGeminiResponse(await res.text(), res.ok));
-  if (!text) throw new Error("Gemini가 빈 응답을 반환했습니다.");
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: userPrompt }] }],
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        generationConfig: {
+          temperature,
+          maxOutputTokens,
+          responseMimeType: "application/json",
+        },
+      }),
+    });
+
+    const parsed = parseGeminiResponse(await res.text(), res.ok);
+    const { text, usage } = extractTextAndGrounding(parsed);
+    if (!text) throw new Error("Gemini가 빈 응답을 반환했습니다.");
+    const data = parseJsonFromModelText<T>(text);
+    return { data, usage };
+  }
 
   try {
-    return JSON.parse(text) as T;
-  } catch {
-    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fence?.[1]) return JSON.parse(fence[1].trim()) as T;
-    throw new Error("Gemini JSON 파싱 실패");
+    return await call(role);
+  } catch (e) {
+    if (shouldRetryWithResearchModel(role, e)) {
+      console.warn("[geminiGenerateJson] writer 모델 실패, research 모델로 재시도", e);
+      return call("research");
+    }
+    throw e;
   }
 }
 
@@ -165,7 +208,7 @@ export async function geminiGenerateWithGoogleSearch(
   temperature = 0.25,
   role: GeminiRole = "research",
   maxOutputTokens = 16384,
-): Promise<{ text: string; grounding: GeminiGroundingMeta }> {
+): Promise<{ text: string; grounding: GeminiGroundingMeta; usage: GeminiTokenUsage }> {
   const key = getGeminiApiKey();
   if (!key) throw new Error("VITE_GEMINI_API_KEY 가 .env 에 설정되어 있지 않습니다.");
   const model = resolveModel(role);
@@ -188,17 +231,41 @@ export async function geminiGenerateWithGoogleSearch(
   return extractTextAndGrounding(parseGeminiResponse(await res.text(), res.ok));
 }
 
+function repairJsonLike(raw: string): string {
+  return raw
+    .replace(/,\s*([}\]])/g, "$1")
+    .replace(/\u201c|\u201d/g, '"')
+    .replace(/\u2018|\u2019/g, "'");
+}
+
 export function parseJsonFromModelText<T>(text: string): T {
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (fence?.[1]) return JSON.parse(fence[1].trim()) as T;
-    const start = text.indexOf("{");
-    const end = text.lastIndexOf("}");
-    if (start >= 0 && end > start) {
-      return JSON.parse(text.slice(start, end + 1)) as T;
-    }
-    throw new Error("모델 응답에서 JSON을 찾지 못했습니다.");
+  const trimmed = text.trim();
+  const attempts: string[] = [trimmed];
+
+  const fence = trimmed.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) attempts.push(fence[1].trim());
+
+  const objStart = trimmed.indexOf("{");
+  const objEnd = trimmed.lastIndexOf("}");
+  if (objStart >= 0 && objEnd > objStart) {
+    attempts.push(trimmed.slice(objStart, objEnd + 1));
   }
+
+  const arrStart = trimmed.indexOf("[");
+  const arrEnd = trimmed.lastIndexOf("]");
+  if (arrStart >= 0 && arrEnd > arrStart) {
+    attempts.push(trimmed.slice(arrStart, arrEnd + 1));
+  }
+
+  for (const candidate of attempts) {
+    for (const variant of [candidate, repairJsonLike(candidate)]) {
+      try {
+        return JSON.parse(variant) as T;
+      } catch {
+        /* next */
+      }
+    }
+  }
+
+  throw new Error("모델 응답에서 JSON을 찾지 못했습니다.");
 }

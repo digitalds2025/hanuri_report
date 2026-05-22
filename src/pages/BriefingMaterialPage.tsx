@@ -6,10 +6,21 @@ import {
   type ParentAudience,
   type SchoolLevel,
 } from "../config/koreaRegions";
+import { BriefingStorylinePanel } from "../components/briefing/BriefingStorylinePanel";
+import { GammaSlideStudio } from "../components/briefing/GammaSlideStudio";
 import { OfficialScanResultsPanel } from "../components/briefing/OfficialScanResultsPanel";
-import { SlideRenderer } from "../components/briefing/SlideRenderer";
+import { SlidePlanReviewPage } from "../components/briefing/SlidePlanReviewPage";
+import { TokenUsagePanel } from "../components/briefing/TokenUsagePanel";
 import { extractTextFromFiles } from "../lib/briefingFileExtract";
-import type { BriefingTopicCandidate, GuardrailIssue } from "../lib/briefingMaterialTypes";
+import { buildStorylineBriefForTopic } from "../lib/briefingStorylineBrief";
+import type {
+  BriefingLayoutSlide,
+  BriefingSlidePlan,
+  BriefingStorylineBrief,
+  BriefingTopicCandidate,
+  MasterOutline,
+} from "../lib/briefingMaterialTypes";
+import { localEduToFormInput } from "../lib/localEdu/dataLayer";
 import {
   buildInstructorGuideMarkdown,
   buildPptxBlob,
@@ -26,18 +37,21 @@ import {
   buildDocxMarkdown,
   layoutSlidesToPptxPayload,
   runLocalEduDataScan,
-  runLocalEduGeneration,
+  runLocalEduSlidePlanning,
+  runLocalEduSlideProduction,
   runLocalEduTopicRecommend,
   type CoreTopicId,
   type LocalEduGenerationOutput,
   type LocalEduInput,
   type LocalEduDataLayerResult,
+  type LocalEduTokenLedger,
+  emptyTokenLedger,
 } from "../lib/localEdu";
 import { getDataCollectionPlan } from "../lib/localEdu/dataMatrix";
 import type { TargetGrade } from "../lib/briefingMaterialTypes";
 import type { BrandIntensity, ToneStyle } from "../lib/localEdu/types";
 
-type WizardStep = "input" | "data" | "topic" | "outline" | "output";
+type WizardStep = "input" | "data" | "topic" | "plan" | "studio";
 
 const SCHOOL_LEVELS: SchoolLevel[] = ["초등", "중등", "고등"];
 const PARENT_TYPES: ParentAudience[] = ["신입 모집", "기존 학생"];
@@ -76,29 +90,6 @@ function buildLocalEduInput(
   };
 }
 
-function GuardrailList({ issues }: { issues: GuardrailIssue[] }) {
-  if (!issues.length) return <p className="text-sm text-emerald-700">가드레일 통과</p>;
-  return (
-    <ul className="space-y-2 text-sm">
-      {issues.map((i, idx) => (
-        <li
-          key={`${i.code}-${idx}`}
-          className={
-            i.severity === "error"
-              ? "text-rose-700"
-              : i.severity === "warning"
-                ? "text-amber-800"
-                : "text-slate-600"
-          }
-        >
-          <strong>[{i.severity}]</strong> {i.message}
-          {i.suggestion ? <span className="block text-xs opacity-80">{i.suggestion}</span> : null}
-        </li>
-      ))}
-    </ul>
-  );
-}
-
 export function BriefingMaterialPage() {
   const [step, setStep] = useState<WizardStep>("input");
   const [busy, setBusy] = useState(false);
@@ -127,9 +118,15 @@ export function BriefingMaterialPage() {
   const [topics, setTopics] = useState<BriefingTopicCandidate[]>([]);
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
   const [generation, setGeneration] = useState<LocalEduGenerationOutput | null>(null);
+  const [masterOutline, setMasterOutline] = useState<MasterOutline | null>(null);
+  const [slidePlans, setSlidePlans] = useState<BriefingSlidePlan[]>([]);
+  const [editableSlides, setEditableSlides] = useState<BriefingLayoutSlide[]>([]);
   const [attachmentText, setAttachmentText] = useState("");
   const [attachmentNames, setAttachmentNames] = useState<string[]>([]);
-  const [previewSlide, setPreviewSlide] = useState(0);
+  const [exportBusy, setExportBusy] = useState(false);
+  const [tokenLedger, setTokenLedger] = useState<LocalEduTokenLedger>(emptyTokenLedger());
+  const [storylineBrief, setStorylineBrief] = useState<BriefingStorylineBrief | null>(null);
+  const [storylineLoading, setStorylineLoading] = useState(false);
 
   const subRegions = useMemo(() => KOREA_REGIONS[region] ?? [], [region]);
   const gradeOptions = useMemo(() => targetGradesForLevel(schoolLevel), [schoolLevel]);
@@ -178,6 +175,30 @@ export function BriefingMaterialPage() {
     }
   }, [schoolLevel, gradeOptions, targetGrade]);
 
+  useEffect(() => {
+    if (!data || !selectedTopic) {
+      setStorylineBrief(null);
+      return;
+    }
+    let cancelled = false;
+    setStorylineLoading(true);
+    const form = localEduToFormInput(dataPlan, attachmentNames);
+    const formWithScan = { ...form, officialScan: data.scan };
+    void buildStorylineBriefForTopic(formWithScan, selectedTopic, pageCount)
+      .then(({ brief }) => {
+        if (!cancelled) setStorylineBrief(brief);
+      })
+      .catch(() => {
+        if (!cancelled) setStorylineBrief(null);
+      })
+      .finally(() => {
+        if (!cancelled) setStorylineLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedTopicId, pageCount, data, dataPlan, attachmentNames, selectedTopic]);
+
   function toggleTopic(id: CoreTopicId) {
     setCoreTopics((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
@@ -189,8 +210,11 @@ export function BriefingMaterialPage() {
     setBusy(true);
     setData(null);
     setTopics([]);
-    setGeneration(null);
-    setSelectedTopicId(null);
+      setGeneration(null);
+      setMasterOutline(null);
+      setSlidePlans([]);
+      setStorylineBrief(null);
+      setSelectedTopicId(null);
     try {
       let attachText = "";
       let names: string[] = [];
@@ -215,10 +239,16 @@ export function BriefingMaterialPage() {
         },
       );
       setData(result);
+      setTokenLedger(result.tokenLedger);
 
       setStatus("Design Layer · 주제 추천·5대 점수");
-      const t = await runLocalEduTopicRecommend(dataPlan, result, attachText);
+      const { topics: t, tokenLedger: ledgerAfterTopics } = await runLocalEduTopicRecommend(
+        dataPlan,
+        result,
+        attachText,
+      );
       setTopics(t);
+      setTokenLedger(ledgerAfterTopics);
       setSelectedTopicId(t[0]?.id ?? null);
       setStep("data");
     } catch (e) {
@@ -229,21 +259,59 @@ export function BriefingMaterialPage() {
     }
   }
 
-  async function handleGenerate() {
+  async function handleStartPlanning() {
     if (!data || !selectedTopic) return;
     setErr(null);
     setBusy(true);
+    setStep("plan");
+    setSlidePlans([]);
+    setMasterOutline(null);
+    setGeneration(null);
+    setEditableSlides([]);
     try {
-      const gen = await runLocalEduGeneration(
+      const planning = await runLocalEduSlidePlanning(
         dataPlan,
         data,
         selectedTopic,
         attachmentText,
         attachmentNames,
+        storylineBrief,
+        (p) => setStatus(`${p.layer}: ${p.message}`),
+      );
+      setMasterOutline(planning.outline);
+      setSlidePlans(planning.slidePlans);
+      setTokenLedger(planning.tokenLedger);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setStep("topic");
+    } finally {
+      setBusy(false);
+      setStatus(null);
+    }
+  }
+
+  async function handleProduceSlides() {
+    if (!data || !selectedTopic || !masterOutline || slidePlans.length === 0) return;
+    setErr(null);
+    setBusy(true);
+    setStep("studio");
+    setEditableSlides([]);
+    setGeneration(null);
+    try {
+      const gen = await runLocalEduSlideProduction(
+        dataPlan,
+        data,
+        selectedTopic,
+        masterOutline,
+        slidePlans,
+        attachmentText,
+        attachmentNames,
+        tokenLedger,
         (p) => setStatus(`${p.layer}: ${p.message}`),
       );
       setGeneration(gen);
-      setStep("output");
+      setEditableSlides(gen.slides);
+      setTokenLedger(gen.tokenLedger);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -253,10 +321,12 @@ export function BriefingMaterialPage() {
   }
 
   const downloadAll = useCallback(async () => {
-    if (!generation) return;
+    if (!generation || editableSlides.length === 0) return;
+    setExportBusy(true);
+    try {
     const safeName = `${subRegion}_${targetGrade}_LocalEdu`.replace(/\s+/g, "_");
     const payload = layoutSlidesToPptxPayload(
-      generation.slides,
+      editableSlides,
       generation.outline.topicTitle,
     );
     const blob = await buildPptxBlob(payload);
@@ -282,15 +352,81 @@ export function BriefingMaterialPage() {
     if (data) {
       downloadTextFile(data.corpusMarkdown, `${safeName}_리서치원본.md`);
     }
-  }, [generation, data, subRegion, targetGrade]);
+    } finally {
+      setExportBusy(false);
+    }
+  }, [generation, editableSlides, data, subRegion, targetGrade]);
+
+  const downloadPptxOnly = useCallback(async () => {
+    if (!generation || editableSlides.length === 0) return;
+    setExportBusy(true);
+    try {
+      const safeName = `${subRegion}_${targetGrade}_LocalEdu`.replace(/\s+/g, "_");
+      const payload = layoutSlidesToPptxPayload(
+        editableSlides,
+        generation.outline.topicTitle,
+      );
+      const blob = await buildPptxBlob(payload);
+      downloadBlob(blob, `${safeName}.pptx`);
+      downloadTextFile(
+        buildInstructorGuideMarkdown(payload),
+        `${safeName}_강사가이드.md`,
+      );
+    } finally {
+      setExportBusy(false);
+    }
+  }, [generation, editableSlides, subRegion, targetGrade]);
 
   const stepLabels: Record<WizardStep, string> = {
     input: "1. 조건",
     data: "2. 데이터",
     topic: "3. 주제",
-    outline: "4. 아웃라인",
-    output: "5. 출력",
+    plan: "4. 슬라이드 기획",
+    studio: "5. 편집·보내기",
   };
+
+  if (step === "plan") {
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6">
+        <Link to="/" className="mb-4 inline-block text-xs text-indigo-600 hover:underline">
+          ← 홈
+        </Link>
+        <SlidePlanReviewPage
+          topicTitle={masterOutline?.topicTitle ?? selectedTopic?.title ?? "설명회"}
+          targetSlideCount={pageCount}
+          dataAsOf={masterOutline?.dataAsOf ?? ""}
+          plans={slidePlans}
+          onPlansChange={setSlidePlans}
+          tokenLedger={tokenLedger}
+          busy={busy}
+          status={status}
+          error={err}
+          onProduce={() => void handleProduceSlides()}
+          onBack={() => setStep("topic")}
+        />
+      </div>
+    );
+  }
+
+  if (step === "studio") {
+    return (
+      <GammaSlideStudio
+        title={generation?.outline.topicTitle ?? selectedTopic?.title ?? "설명회 자료"}
+        slides={editableSlides}
+        onSlidesChange={setEditableSlides}
+        guardrail={generation?.guardrail ?? null}
+        tokenLedger={tokenLedger}
+        isGenerating={busy}
+        generateStatus={status}
+        generateError={err}
+        busyExport={exportBusy}
+        onExportPptx={() => downloadPptxOnly()}
+        onExportBundle={() => downloadAll()}
+        onBack={() => setStep("topic")}
+        onRetry={selectedTopic && slidePlans.length ? () => void handleProduceSlides() : undefined}
+      />
+    );
+  }
 
   return (
     <div className="mx-auto max-w-5xl space-y-8 pb-24">
@@ -300,7 +436,7 @@ export function BriefingMaterialPage() {
           LocalEdu Master — 지역 맞춤 설명회·상담 자료 반자동 생성
         </p>
         <p className="mt-2 text-xs text-slate-500">
-          Input → Data(RAG) → Design(마스터 아웃라인) → Generation(PPT/DOCX) → Guardrail
+          조건·수집 → 주제 → 슬라이드별 기획 → 제작·편집 → PPTX보내기
         </p>
         <Link to="/" className="mt-2 inline-block text-xs text-indigo-600 hover:underline">
           ← 홈
@@ -537,8 +673,10 @@ export function BriefingMaterialPage() {
         </div>
       ) : null}
 
-      {(step === "data" || step === "topic" || step === "outline" || step === "output") && data ? (
+      {(step === "data" || step === "topic") && data ? (
         <div className="space-y-6">
+          <TokenUsagePanel ledger={tokenLedger} highlight="topicSelection" />
+
           <section className="rounded-2xl border bg-white p-5 shadow-sm">
             <h2 className="text-sm font-bold">Data Layer · 수집 결과</h2>
             <p className="mt-1 text-xs text-slate-500 whitespace-pre-wrap">{data.branchSummary}</p>
@@ -569,90 +707,28 @@ export function BriefingMaterialPage() {
                 </label>
               ))}
             </div>
+
+            <BriefingStorylinePanel
+              brief={storylineBrief}
+              loading={storylineLoading}
+              targetSlideCount={pageCount}
+            />
+
             <button
               type="button"
-              disabled={busy || !selectedTopic}
-              onClick={() => {
-                setStep("outline");
-                void handleGenerate();
-              }}
+              disabled={busy || !selectedTopic || storylineLoading}
+              onClick={() => void handleStartPlanning()}
               className="mt-4 w-full rounded-xl bg-slate-900 py-3 text-sm font-bold text-white disabled:opacity-50"
             >
-              {busy ? "Generation Layer…" : "마스터 아웃라인 → PPT/DOCX 생성"}
+              {busy
+                ? "슬라이드 기획 생성 중…"
+                : `슬라이드별 기획 · ${pageCount}장 확인 화면으로`}
             </button>
+            <p className="mt-2 text-center text-[11px] text-slate-500">
+              주제·목적에 맞춘 설명회 흐름을 확인한 뒤, 슬라이드별 내용 기획을 수정하고 「제작하기」를
+              누르세요.
+            </p>
           </section>
-
-          {generation ? (
-            <>
-              <section className="rounded-2xl border bg-white p-5 shadow-sm">
-                <h2 className="text-sm font-bold">Guardrail Layer</h2>
-                <p className="mt-1 text-xs">
-                  {generation.guardrail.passed ? "✅ 검수 통과" : "⚠️ 수정 권장"}
-                </p>
-                <GuardrailList issues={generation.guardrail.issues} />
-              </section>
-
-              <section className="rounded-2xl border bg-white p-5 shadow-sm">
-                <h2 className="text-sm font-bold">마스터 아웃라인</h2>
-                <p className="text-xs text-slate-500">
-                  기준 시점: {generation.dataAsOf} · {generation.outline.regionLabel}
-                </p>
-                <ul className="mt-3 max-h-48 space-y-2 overflow-auto text-xs">
-                  {generation.outline.blocks.map((b) => (
-                    <li key={b.blockId} className="rounded-lg bg-slate-50 p-2">
-                      <strong>{b.title}</strong>
-                      <ul className="mt-1 list-inside list-disc text-slate-600">
-                        {b.bulletPoints.slice(0, 4).map((p) => (
-                          <li key={p}>{p}</li>
-                        ))}
-                      </ul>
-                      {b.instructorInsightSlots?.length ? (
-                        <p className="mt-1 text-amber-800">
-                          💡 {b.instructorInsightSlots.join(" · ")}
-                        </p>
-                      ) : null}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-
-              <section className="rounded-2xl border bg-white p-5 shadow-sm">
-                <div className="flex items-center justify-between">
-                  <h2 className="text-sm font-bold">PPT 미리보기</h2>
-                  <div className="flex gap-2 text-xs">
-                    <button
-                      type="button"
-                      disabled={previewSlide <= 0}
-                      onClick={() => setPreviewSlide((n) => n - 1)}
-                    >
-                      이전
-                    </button>
-                    <span>
-                      {previewSlide + 1} / {generation.slides.length}
-                    </span>
-                    <button
-                      type="button"
-                      disabled={previewSlide >= generation.slides.length - 1}
-                      onClick={() => setPreviewSlide((n) => n + 1)}
-                    >
-                      다음
-                    </button>
-                  </div>
-                </div>
-                <div className="mt-4 aspect-video max-h-[420px] w-full">
-                  <SlideRenderer slide={generation.slides[previewSlide]} />
-                </div>
-              </section>
-
-              <button
-                type="button"
-                onClick={() => void downloadAll()}
-                className="w-full rounded-xl bg-emerald-600 py-3 text-sm font-bold text-white"
-              >
-                PPTX · DOCX · 상담키트 · 리서치 원본 다운로드
-              </button>
-            </>
-          ) : null}
         </div>
       ) : null}
 

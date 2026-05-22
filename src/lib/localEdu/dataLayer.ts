@@ -6,6 +6,11 @@ import {
 import type { SearchKeywordBatch } from "../briefingSearchKeywords";
 import type { BriefingMaterialFormInput } from "../briefingMaterialTypes";
 import { buildBranchedScanBatches, getDataCollectionPlan } from "./dataMatrix";
+import {
+  addTokenUsage,
+  emptyStageUsage,
+  emptyTokenLedger,
+} from "./tokenUsage";
 import type { LocalEduDataLayerResult, LocalEduInput } from "./types";
 
 const SCHOOL_BATCH_IDS = new Set([
@@ -58,8 +63,9 @@ export async function runLocalEduDataLayer(
     (b) => SCHOOL_BATCH_IDS.has(b.id),
   );
 
+  let schoolScan: Awaited<ReturnType<typeof scanOfficialDataWithBatches>> | null = null;
   if (schoolBatches.length > 0) {
-    const schoolScan = await scanOfficialDataWithBatches(
+    schoolScan = await scanOfficialDataWithBatches(
       { ...form, purposeCustom: form.purposeCustom },
       attachmentText,
       [],
@@ -91,8 +97,27 @@ export async function runLocalEduDataLayer(
         `전체 · ${input.schoolLevel} ${input.targetGrade}`,
       ),
       scanScope: "local_edu_full",
+      tokenUsage: {
+        inputTokens:
+          (scan.tokenUsage?.inputTokens ?? 0) + (schoolScan.tokenUsage?.inputTokens ?? 0),
+        outputTokens:
+          (scan.tokenUsage?.outputTokens ?? 0) + (schoolScan.tokenUsage?.outputTokens ?? 0),
+      },
     };
   }
+
+  const ledger = emptyTokenLedger();
+  const scanUsage = scan.tokenUsage ?? { inputTokens: 0, outputTokens: 0 };
+  const apiCalls = scan.keywordBatches.reduce(
+    (n, b) => n + Math.ceil(b.queries.length / 5),
+    0,
+  );
+  ledger.dataCollection = addTokenUsage(
+    emptyStageUsage(),
+    scanUsage.inputTokens,
+    scanUsage.outputTokens,
+    apiCalls,
+  );
 
   const corpusMarkdown = [
     scan.digestText,
@@ -111,5 +136,6 @@ export async function runLocalEduDataLayer(
     scan,
     corpusMarkdown,
     branchSummary: plan.matrixSummary,
+    tokenLedger: ledger,
   };
 }

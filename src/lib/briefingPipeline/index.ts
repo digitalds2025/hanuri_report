@@ -66,7 +66,7 @@ export async function runStep2TopicProposals(
   input: BriefingPipelineInput,
   research: BriefingResearchResult,
 ): Promise<BriefingTopicProposal[]> {
-  const parsed = await geminiGenerateJson<{ topics?: BriefingTopicProposal[] }>(
+  const { data: parsed } = await geminiGenerateJson<{ topics?: BriefingTopicProposal[] }>(
     step2TopicsSystem(),
     step2TopicsUser(research.markdown, input, research.factCount),
     0.35,
@@ -109,14 +109,15 @@ export async function runStep3SlideManuscript(
 [Step 1 공식 리서치 원본 — 전건 사용, 임의 요약·생략 금지]
 ${research.markdown}`;
 
-  return geminiGenerateText(userPrompt, 0.4, "writer", 32768);
+  const { text } = await geminiGenerateText(userPrompt, 0.4, "writer", 32768);
+  return text;
 }
 
 /** Step 4: gemini-3.5-flash JSON → PPTX 빌드용 */
 export async function runStep4CompilePptxJson(
   manuscriptMd: string,
 ): Promise<BriefingPptxPayload> {
-  const parsed = await geminiGenerateJson<BriefingPptxPayload>(
+  const { data: parsed } = await geminiGenerateJson<BriefingPptxPayload>(
     step4CompileSystem(),
     `마크다운 원고:\n${manuscriptMd}`,
     0.2,

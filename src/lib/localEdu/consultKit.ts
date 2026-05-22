@@ -8,9 +8,12 @@ export async function buildConsultKit(
   outline: MasterOutline,
   corpusExcerpt: string,
 ): Promise<{
-  onePageSummaryMd: string;
-  questionListMd: string;
-  kakaoMessageMd: string;
+  kit: {
+    onePageSummaryMd: string;
+    questionListMd: string;
+    kakaoMessageMd: string;
+  };
+  usage: import("../geminiClient").GeminiTokenUsage;
 }> {
   const regionLabel = `${input.region} ${input.subRegion}`;
   const purpose =
@@ -36,15 +39,29 @@ ${corpusExcerpt.slice(0, 12000)}
 # 후속 카카오톡/문자 안내문
 (200자 내외, 존댓말)`;
 
-  const text = await geminiGenerateText(prompt, 0.4, "writer", 8192);
+  let text: string;
+  let usage: import("../geminiClient").GeminiTokenUsage;
+  try {
+    const result = await geminiGenerateText(prompt, 0.4, "writer", 8192);
+    text = result.text;
+    usage = result.usage;
+  } catch (e) {
+    console.warn("[buildConsultKit] writer 실패, research 모델 재시도", e);
+    const result = await geminiGenerateText(prompt, 0.4, "research", 8192);
+    text = result.text;
+    usage = result.usage;
+  }
   const sections = text.split(/^# /m).filter(Boolean);
   const onePage = sections.find((s) => s.includes("1페이지") || s.startsWith("1페이지"));
   const questions = sections.find((s) => s.includes("질문"));
   const kakao = sections.find((s) => s.includes("카카오") || s.includes("문자"));
 
   return {
-    onePageSummaryMd: onePage ? `# ${onePage.trim()}` : text,
-    questionListMd: questions ? `# ${questions.trim()}` : "# 상담 핵심 질문\n(생성 실패 — 수동 작성)",
-    kakaoMessageMd: kakao ? `# ${kakao.trim()}` : "# 후속 안내문\n(생성 실패 — 수동 작성)",
+    kit: {
+      onePageSummaryMd: onePage ? `# ${onePage.trim()}` : text,
+      questionListMd: questions ? `# ${questions.trim()}` : "# 상담 핵심 질문\n(생성 실패 — 수동 작성)",
+      kakaoMessageMd: kakao ? `# ${kakao.trim()}` : "# 후속 안내문\n(생성 실패 — 수동 작성)",
+    },
+    usage,
   };
 }

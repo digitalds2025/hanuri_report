@@ -5,7 +5,8 @@ import {
   supplementOfficialDataScan,
   type ScanProgress,
 } from "./briefingOfficialDataScan";
-import { geminiGenerateJson } from "./geminiClient";
+import { geminiGenerateJson, parseJsonFromModelText, type GeminiTokenUsage } from "./geminiClient";
+import { buildPerSlidePlansSync } from "./briefingSlidePlanning";
 import { buildOutlineSkeleton, PPT_PRIORITY_BLOCKS } from "./briefingOutlineTemplates";
 import { formatRegionContext, getRegionProfile } from "./briefingRegionProfiles";
 import type {
@@ -34,7 +35,7 @@ function formContextBlock(input: BriefingMaterialFormInput): string {
     input.attachmentNames.length ? `B등급 첨부(보조): ${input.attachmentNames.join(", ")}` : "",
   ];
   if (input.officialScan) {
-    lines.push("", "[공식 데이터 스캔 전건]", input.officialScan.digestText.slice(0, 48000));
+    lines.push("", "[공식 데이터 스캔]", input.officialScan.digestText.slice(0, 18000));
   }
   return lines.filter(Boolean).join("\n");
 }
@@ -114,7 +115,7 @@ export async function recommendBriefingTopics(
   referenceText: string,
   input: BriefingMaterialFormInput,
   officialScan: OfficialDataScanResult,
-): Promise<BriefingTopicCandidate[]> {
+): Promise<{ topics: BriefingTopicCandidate[]; usage: GeminiTokenUsage }> {
   const scanInput: BriefingMaterialFormInput = { ...input, officialScan };
   const userPrompt = `${formContextBlock(scanInput)}
 
@@ -124,11 +125,15 @@ ${referenceText ? referenceText.slice(0, 6000) : "(없음)"}
 수집 facts ${officialScan.facts.length}건, 관내 학교 ${officialScan.discoveredSchools.length}곳.
 위 공식 데이터만 사용해 주제 3~5개와 5대 점수를 JSON으로 제안하세요.`;
 
-  const parsed = await geminiGenerateJson<{ topics?: unknown }>(TOPIC_SYSTEM, userPrompt, 0.35);
+  const { data: parsed, usage } = await geminiGenerateJson<{ topics?: unknown }>(
+    TOPIC_SYSTEM,
+    userPrompt,
+    0.35,
+  );
   const arr = Array.isArray(parsed.topics) ? parsed.topics : [];
   if (!arr.length) throw new Error("주제 추천 결과가 비어 있습니다.");
 
-  return arr
+  const topics = arr
     .map((item, i) => {
       const o = item as Record<string, unknown>;
       const scores = normalizeScores((o.scores ?? {}) as Record<string, unknown>);
@@ -150,6 +155,8 @@ ${referenceText ? referenceText.slice(0, 6000) : "(없음)"}
       };
     })
     .sort((a, b) => b.totalScore - a.totalScore);
+
+  return { topics, usage };
 }
 
 const OUTLINE_FILL_SYSTEM = `당신은 마스터 아웃라인 '조립' 엔진입니다.
@@ -160,40 +167,12 @@ const OUTLINE_FILL_SYSTEM = `당신은 마스터 아웃라인 '조립' 엔진입
 
 JSON: { "blocks": [{ "blockId", "title", "purpose", "bulletPoints", "instructorInsightSlots" }] }`;
 
-export async function buildMasterOutline(
-  referenceText: string,
+function mergeOutlineFromSkeleton(
+  skeleton: MasterOutlineBlock[],
+  filled: MasterOutlineBlock[],
   input: BriefingMaterialFormInput,
-  topic: BriefingTopicCandidate,
-): Promise<MasterOutline> {
-  const dataAsOf = input.officialScan?.scannedAt.slice(0, 10) ?? todayDataAsOf();
-  const card = getRegionProfile(input.subRegion, input.region);
-  const skeleton = buildOutlineSkeleton({
-    schoolLevel: input.schoolLevel,
-    targetGrade: input.targetGrade,
-    parentAudience: input.parentAudience,
-    regionCard: card,
-    topicTitle: topic.title,
-    dataAsOf,
-  });
-
-  const userPrompt = `${formContextBlock(input)}
-
-[선택 주제] ${topic.title}: ${topic.summary}
-
-[블록 골격]
-${JSON.stringify(skeleton, null, 2)}
-
-[B등급 첨부]
-${referenceText ? referenceText.slice(0, 4000) : "(없음)"}`;
-
-  const parsed = await geminiGenerateJson<{ blocks?: MasterOutlineBlock[] }>(
-    OUTLINE_FILL_SYSTEM,
-    userPrompt,
-    0.3,
-  );
-
-  const filled = Array.isArray(parsed.blocks) ? parsed.blocks : skeleton;
-  const merged = skeleton.map((sk) => {
+): MasterOutlineBlock[] {
+  return skeleton.map((sk) => {
     const f = filled.find((b) => b.blockId === sk.blockId);
     return {
       ...sk,
@@ -205,44 +184,170 @@ ${referenceText ? referenceText.slice(0, 4000) : "(없음)"}`;
       ],
     };
   });
+}
 
-  return {
+export async function buildMasterOutline(
+  referenceText: string,
+  input: BriefingMaterialFormInput,
+  topic: BriefingTopicCandidate,
+): Promise<{ outline: MasterOutline; usage: GeminiTokenUsage; usedFallback: boolean }> {
+  const dataAsOf = input.officialScan?.scannedAt.slice(0, 10) ?? todayDataAsOf();
+  const card = getRegionProfile(input.subRegion, input.region);
+  const skeleton = buildOutlineSkeleton({
+    schoolLevel: input.schoolLevel,
+    targetGrade: input.targetGrade,
+    parentAudience: input.parentAudience,
+    regionCard: card,
+    topicTitle: topic.title,
+    dataAsOf,
+  });
+
+  const baseOutline: MasterOutline = {
     topicId: topic.id,
     topicTitle: topic.title,
     dataAsOf,
     regionLabel: `${input.region} ${input.subRegion}`,
     targetLabel: `${input.schoolLevel} ${input.targetGrade}`,
     purposeLabel: purposeLabel(input.parentAudience),
-    blocks: merged,
+    blocks: skeleton,
   };
+
+  const userPrompt = `${formContextBlock(input)}
+
+[선택 주제] ${topic.title}: ${topic.summary}
+
+[블록 골격]
+${JSON.stringify(skeleton, null, 2)}
+
+[B등급 첨부]
+${referenceText ? referenceText.slice(0, 4000) : "(없음)"}`;
+
+  try {
+    const { data: parsed, usage } = await geminiGenerateJson<{ blocks?: MasterOutlineBlock[] }>(
+      OUTLINE_FILL_SYSTEM,
+      userPrompt,
+      0.3,
+      "writer",
+      16384,
+    );
+    const filled = Array.isArray(parsed.blocks) ? parsed.blocks : skeleton;
+    return {
+      outline: { ...baseOutline, blocks: mergeOutlineFromSkeleton(skeleton, filled, input) },
+      usage,
+      usedFallback: false,
+    };
+  } catch (e) {
+    console.warn("[buildMasterOutline] AI 실패, 골격 폴백 사용", e);
+    return {
+      outline: baseOutline,
+      usage: { inputTokens: 0, outputTokens: 0 },
+      usedFallback: true,
+    };
+  }
 }
 
-const ASSEMBLY_SYSTEM = `Gamma 스타일 슬라이드 조립. 공식 스캔 digest·아웃라인 bullet만 사용.
-타입: TITLE, SECTION_HEADER, GRID_CARDS, DATA_TABLE, COMPARISON, CHECKLIST, STEP_CARDS,
-DETAILED_TEXT, INSTRUCTOR_INSIGHT, SOURCES
-서열·단정 금지. JSON 배열만.`;
+const ASSEMBLY_SYSTEM = `Gamma 스타일 슬라이드 조립. 아웃라인 bullet만 사용. 서열·단정 금지.
+반드시 JSON만: { "slides": [ { "type": "TITLE|CHECKLIST|SECTION_HEADER|INSTRUCTOR_INSIGHT|SOURCES|DETAILED_TEXT", "title": "...", ... } ] }
+각 slide에 speakerNotes(발표 멘트) 포함. SOURCES 슬라이드에 dataAsOf 필수.`;
+
+function extractSlidesFromParsed(parsed: unknown): BriefingLayoutSlide[] {
+  if (Array.isArray(parsed)) return parsed as BriefingLayoutSlide[];
+  if (parsed && typeof parsed === "object") {
+    const o = parsed as Record<string, unknown>;
+    if (Array.isArray(o.slides)) return o.slides as BriefingLayoutSlide[];
+    if (Array.isArray(o.data)) return o.data as BriefingLayoutSlide[];
+  }
+  return [];
+}
+
+/** AI 없이 아웃라인 → 편집 가능 슬라이드 (폴백) */
+export function outlineToLayoutSlides(outline: MasterOutline): BriefingLayoutSlide[] {
+  const blocks = outline.blocks.filter((b) =>
+    (PPT_PRIORITY_BLOCKS as readonly string[]).includes(b.blockId as (typeof PPT_PRIORITY_BLOCKS)[number]),
+  );
+
+  return blocks.map((b) => {
+    const notes = b.instructorInsightSlots?.length
+      ? `현장 보강: ${b.instructorInsightSlots.join(" / ")}`
+      : "";
+
+    if (b.blockId === "cover") {
+      return {
+        type: "TITLE",
+        title: b.title,
+        subtitle: b.bulletPoints[0] ?? b.purpose,
+        speakerNotes: notes,
+      };
+    }
+    if (b.blockId === "sources") {
+      return {
+        type: "SOURCES",
+        title: b.title,
+        dataAsOf: outline.dataAsOf,
+        items: b.bulletPoints,
+        speakerNotes: notes,
+      };
+    }
+    if (b.instructorInsightSlots?.length) {
+      return {
+        type: "INSTRUCTOR_INSIGHT",
+        title: b.title,
+        prompts: b.instructorInsightSlots,
+        speakerNotes: notes,
+      };
+    }
+    return {
+      type: "CHECKLIST",
+      title: b.title,
+      items: b.bulletPoints.length ? b.bulletPoints : [b.purpose],
+      speakerNotes: notes,
+    };
+  });
+}
 
 export async function assembleBriefingSlides(
   input: BriefingMaterialFormInput,
   outline: MasterOutline,
-): Promise<BriefingLayoutSlide[]> {
+): Promise<{ slides: BriefingLayoutSlide[]; usage: GeminiTokenUsage; usedFallback: boolean }> {
   const pptBlocks = outline.blocks.filter((b) =>
-    (PPT_PRIORITY_BLOCKS as readonly string[]).includes(b.blockId),
+    (PPT_PRIORITY_BLOCKS as readonly string[]).includes(b.blockId as (typeof PPT_PRIORITY_BLOCKS)[number]),
   );
 
-  const userPrompt = `${formContextBlock(input)}
-
-[아웃라인 PPT 블록]
+  const userPrompt = `[아웃라인 PPT 블록]
 ${JSON.stringify(pptBlocks, null, 2)}
 
-${input.pageCount}장 JSON 슬라이드. SOURCES에 dataAsOf: ${outline.dataAsOf} 및 스캔 출처 포함.`;
+지역: ${input.region} ${input.subRegion}
+슬라이드 약 ${Math.min(input.pageCount, pptBlocks.length + 2)}장.
+JSON: { "slides": [ ... ] }`;
 
-  const parsed = await geminiGenerateJson<unknown>(ASSEMBLY_SYSTEM, userPrompt, 0.35);
-  const arr = Array.isArray(parsed) ? parsed : (parsed as { slides?: unknown }).slides;
-  if (!Array.isArray(arr) || arr.length === 0) {
-    throw new Error("슬라이드 조립 결과가 비어 있습니다.");
+  try {
+    const { data: parsed, usage } = await geminiGenerateJson<unknown>(
+      ASSEMBLY_SYSTEM,
+      userPrompt,
+      0.35,
+      "writer",
+      24576,
+    );
+    let slides = extractSlidesFromParsed(parsed);
+    if (!slides.length && typeof parsed === "string") {
+      slides = extractSlidesFromParsed(parseJsonFromModelText(parsed));
+    }
+    if (slides.length > 0) {
+      return { slides, usage, usedFallback: false };
+    }
+  } catch (e) {
+    console.warn("[assembleBriefingSlides] AI 실패, 아웃라인 폴백", e);
   }
-  return arr as BriefingLayoutSlide[];
+
+  const fallback = outlineToLayoutSlides(outline);
+  if (!fallback.length) {
+    throw new Error("슬라이드를 만들 수 없습니다. 주제를 다시 선택해 주세요.");
+  }
+  return {
+    slides: fallback,
+    usage: { inputTokens: 0, outputTokens: 0 },
+    usedFallback: true,
+  };
 }
 
 export async function buildDocxSections(
@@ -262,20 +367,8 @@ export async function buildDocxSections(
   }));
 }
 
-export function outlineToSlidePlans(outline: MasterOutline): BriefingSlidePlan[] {
-  const pptBlocks = outline.blocks.filter((b) =>
-    (PPT_PRIORITY_BLOCKS as readonly string[]).includes(b.blockId),
-  );
-  return pptBlocks.map((b, i) => ({
-    slideNumber: i + 1,
-    title: b.title,
-    purpose: b.purpose,
-    keyPoints: b.bulletPoints,
-    speakerNotes: b.instructorInsightSlots?.length
-      ? `현장 보강: ${b.instructorInsightSlots.join(" / ")}`
-      : "",
-    blockId: b.blockId,
-  }));
+export function outlineToSlidePlans(outline: MasterOutline, pageCount = 18): BriefingSlidePlan[] {
+  return buildPerSlidePlansSync(outline, [], pageCount);
 }
 
 export async function planBriefingSlides(
@@ -283,10 +376,10 @@ export async function planBriefingSlides(
   input: BriefingMaterialFormInput,
 ): Promise<BriefingSlidePlan[]> {
   const scan = await scanOfficialData(input, referenceText);
-  const topics = await recommendBriefingTopics(referenceText, input, scan);
+  const { topics } = await recommendBriefingTopics(referenceText, input, scan);
   const topic = topics[0];
   if (!topic) throw new Error("주제를 생성하지 못했습니다.");
-  const outline = await buildMasterOutline(referenceText, { ...input, officialScan: scan }, topic);
+  const { outline } = await buildMasterOutline(referenceText, { ...input, officialScan: scan }, topic);
   return outlineToSlidePlans(outline);
 }
 
@@ -313,8 +406,8 @@ export async function designBriefingSlideLayouts(
   };
   const outline =
     input.masterOutline ??
-    (await buildMasterOutline("", input, topic));
-  return assembleBriefingSlides(input, outline);
+    (await buildMasterOutline("", input, topic)).outline;
+  return (await assembleBriefingSlides(input, outline)).slides;
 }
 
 export function targetGradesForLevel(level: SchoolLevel): import("./briefingMaterialTypes").TargetGrade[] {

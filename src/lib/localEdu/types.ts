@@ -1,12 +1,14 @@
 import type { ParentAudience, SchoolLevel } from "../../config/koreaRegions";
 import type {
   BriefingLayoutSlide,
+  BriefingSlidePlan,
   BriefingTopicCandidate,
   GuardrailReport,
   MasterOutline,
   OfficialDataScanResult,
   TargetGrade,
 } from "../briefingMaterialTypes";
+import type { LocalEduTokenLedger } from "./tokenUsage";
 
 /** 핵심 주제 칩 (복수 선택) */
 export const CORE_TOPIC_OPTIONS = [
@@ -43,6 +45,7 @@ export type LocalEduDataLayerResult = {
   scan: OfficialDataScanResult;
   corpusMarkdown: string;
   branchSummary: string;
+  tokenLedger: LocalEduTokenLedger;
 };
 
 export type ConsultKitOutput = {
@@ -51,13 +54,21 @@ export type ConsultKitOutput = {
   kakaoMessageMd: string;
 };
 
+export type LocalEduPlanningOutput = {
+  outline: MasterOutline;
+  slidePlans: BriefingSlidePlan[];
+  tokenLedger: LocalEduTokenLedger;
+};
+
 export type LocalEduGenerationOutput = {
   outline: MasterOutline;
+  slidePlans: BriefingSlidePlan[];
   slides: BriefingLayoutSlide[];
   docxSections: { blockId: string; title: string; paragraphs: string[] }[];
   consultKit: ConsultKitOutput;
   guardrail: GuardrailReport;
   dataAsOf: string;
+  tokenLedger: LocalEduTokenLedger;
 };
 
 export type LocalEduSession = {

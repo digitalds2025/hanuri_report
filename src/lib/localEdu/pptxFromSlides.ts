@@ -36,8 +36,32 @@ function bulletsFromSlide(slide: BriefingLayoutSlide): string[] {
   }
 
   if (Array.isArray(slide.steps)) {
-    for (const s of slide.steps as { title?: string; desc?: string }[]) {
-      bullets.push(`${s.title ?? ""} — ${s.desc ?? ""}`.trim());
+    for (const s of slide.steps as { title?: string; desc?: string; content?: string }[]) {
+      bullets.push(`${s.title ?? ""} — ${s.content ?? s.desc ?? ""}`.trim());
+    }
+  }
+
+  if (Array.isArray(slide.stats)) {
+    for (const s of slide.stats as { value?: string; label?: string }[]) {
+      bullets.push(`${s.value ?? ""} ${s.label ?? ""}`.trim());
+    }
+  }
+
+  if (Array.isArray(slide.bars)) {
+    for (const b of slide.bars as { label?: string; display?: string; value?: number }[]) {
+      bullets.push(`${b.label ?? ""}: ${b.display ?? b.value ?? ""}`.trim());
+    }
+  }
+
+  if (Array.isArray(slide.icons)) {
+    for (const ic of slide.icons as { label?: string; desc?: string }[]) {
+      bullets.push(`${ic.label ?? ""} — ${ic.desc ?? ""}`.trim());
+    }
+  }
+
+  if (Array.isArray(slide.kpis)) {
+    for (const k of slide.kpis as { value?: string; label?: string }[]) {
+      bullets.push(`${k.value ?? ""} · ${k.label ?? ""}`.trim());
     }
   }
 

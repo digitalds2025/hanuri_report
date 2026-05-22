@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./tokenUsage";
 export * from "./dataMatrix";
 export * from "./dataLayer";
 export * from "./pipeline";
