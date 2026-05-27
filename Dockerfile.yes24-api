@@ -14,6 +14,8 @@ COPY cloud-run/yes24-api/package.root-for-docker.json /app/package.json
 RUN cd /app && npm install --omit=dev
 
 COPY yes24BookScrape.ts /app/yes24BookScrape.ts
+COPY bookAiMetadataParse.ts /app/bookAiMetadataParse.ts
+COPY src/lib/bookAiMetadataParse.ts /app/src/lib/bookAiMetadataParse.ts
 COPY cloud-run/yes24-api/package.json /app/cloud-run/yes24-api/package.json
 RUN cd /app/cloud-run/yes24-api && npm install --omit=dev
 

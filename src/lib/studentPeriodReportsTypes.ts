@@ -24,6 +24,7 @@ export type HalfReportRow = {
   h_report_id: string;
   half_year_code: string;
   reading_type_name: string | null;
+  type_logic_code: string | null;
   type_description: string | null;
   teacher_comment: string | null;
   score_reading: number;
@@ -31,6 +32,16 @@ export type HalfReportRow = {
   score_discussion: number;
   score_writing: number;
   score_growth: number;
+  score_overview: string | null;
+  score_reading_desc: string | null;
+  score_thinking_desc: string | null;
+  score_discussion_desc: string | null;
+  score_writing_desc: string | null;
+  score_growth_desc: string | null;
+  gauge_high_pillar: string | null;
+  gauge_low_pillar: string | null;
+  gauge_high_desc: string | null;
+  gauge_low_desc: string | null;
   created_at: string;
 };
 

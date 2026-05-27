@@ -96,6 +96,16 @@ type LocalHReport = {
   score_discussion: number;
   score_writing: number;
   score_growth: number;
+  score_overview: string | null;
+  score_reading_desc: string | null;
+  score_thinking_desc: string | null;
+  score_discussion_desc: string | null;
+  score_writing_desc: string | null;
+  score_growth_desc: string | null;
+  gauge_high_pillar: string | null;
+  gauge_low_pillar: string | null;
+  gauge_high_desc: string | null;
+  gauge_low_desc: string | null;
   reading_type_name: string | null;
   type_logic_code: string | null;
   type_description: string | null;
@@ -521,8 +531,14 @@ function upsertBook(db: LocalDatabase, row: Omit<Book, "id" | "created_at"> & { 
       introduce: row.introduce ?? prev.introduce,
       author_cmt: row.author_cmt ?? prev.author_cmt,
       pub_cmt: row.pub_cmt ?? prev.pub_cmt,
-      ai_category: row.ai_category ?? prev.ai_category,
-      ai_keywords: row.ai_keywords ?? prev.ai_keywords,
+      ai_category:
+        row.ai_category != null && String(row.ai_category).trim()
+          ? String(row.ai_category).trim()
+          : prev.ai_category,
+      ai_keywords:
+        Array.isArray(row.ai_keywords) && row.ai_keywords.length > 0
+          ? row.ai_keywords
+          : prev.ai_keywords,
     };
     return prev.id;
   }

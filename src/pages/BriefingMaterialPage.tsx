@@ -9,11 +9,13 @@ import {
 import { BriefingStorylinePanel } from "../components/briefing/BriefingStorylinePanel";
 import { GammaSlideStudio } from "../components/briefing/GammaSlideStudio";
 import { OfficialScanResultsPanel } from "../components/briefing/OfficialScanResultsPanel";
+import { ManuscriptReviewPage } from "../components/briefing/ManuscriptReviewPage";
 import { SlidePlanReviewPage } from "../components/briefing/SlidePlanReviewPage";
 import { TokenUsagePanel } from "../components/briefing/TokenUsagePanel";
 import { extractTextFromFiles } from "../lib/briefingFileExtract";
 import { buildStorylineBriefForTopic } from "../lib/briefingStorylineBrief";
 import type {
+  BriefingFoundationReport,
   BriefingLayoutSlide,
   BriefingSlidePlan,
   BriefingStorylineBrief,
@@ -40,6 +42,7 @@ import {
   runLocalEduSlidePlanning,
   runLocalEduSlideProduction,
   runLocalEduTopicRecommend,
+  runLocalEduWriteManuscript,
   type CoreTopicId,
   type LocalEduGenerationOutput,
   type LocalEduInput,
@@ -51,7 +54,7 @@ import { getDataCollectionPlan } from "../lib/localEdu/dataMatrix";
 import type { TargetGrade } from "../lib/briefingMaterialTypes";
 import type { BrandIntensity, ToneStyle } from "../lib/localEdu/types";
 
-type WizardStep = "input" | "data" | "topic" | "plan" | "studio";
+type WizardStep = "input" | "data" | "topic" | "manuscript" | "plan" | "studio";
 
 const SCHOOL_LEVELS: SchoolLevel[] = ["초등", "중등", "고등"];
 const PARENT_TYPES: ParentAudience[] = ["신입 모집", "기존 학생"];
@@ -127,6 +130,7 @@ export function BriefingMaterialPage() {
   const [tokenLedger, setTokenLedger] = useState<LocalEduTokenLedger>(emptyTokenLedger());
   const [storylineBrief, setStorylineBrief] = useState<BriefingStorylineBrief | null>(null);
   const [storylineLoading, setStorylineLoading] = useState(false);
+  const [foundationReport, setFoundationReport] = useState<BriefingFoundationReport | null>(null);
 
   const subRegions = useMemo(() => KOREA_REGIONS[region] ?? [], [region]);
   const gradeOptions = useMemo(() => targetGradesForLevel(schoolLevel), [schoolLevel]);
@@ -214,6 +218,7 @@ export function BriefingMaterialPage() {
       setMasterOutline(null);
       setSlidePlans([]);
       setStorylineBrief(null);
+      setFoundationReport(null);
       setSelectedTopicId(null);
     try {
       let attachText = "";
@@ -259,8 +264,33 @@ export function BriefingMaterialPage() {
     }
   }
 
-  async function handleStartPlanning() {
+  async function handleWriteManuscript() {
     if (!data || !selectedTopic) return;
+    setErr(null);
+    setBusy(true);
+    setFoundationReport(null);
+    try {
+      const { report, tokenLedger: ledger } = await runLocalEduWriteManuscript(
+        dataPlan,
+        data,
+        selectedTopic,
+        attachmentText,
+        attachmentNames,
+        (p) => setStatus(`${p.layer}: ${p.message}`),
+      );
+      setFoundationReport(report);
+      setTokenLedger(ledger);
+      setStep("manuscript");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+      setStatus(null);
+    }
+  }
+
+  async function handleStartSlidePlanning() {
+    if (!data || !selectedTopic || !foundationReport) return;
     setErr(null);
     setBusy(true);
     setStep("plan");
@@ -273,9 +303,11 @@ export function BriefingMaterialPage() {
         dataPlan,
         data,
         selectedTopic,
+        foundationReport,
         attachmentText,
         attachmentNames,
         storylineBrief,
+        tokenLedger,
         (p) => setStatus(`${p.layer}: ${p.message}`),
       );
       setMasterOutline(planning.outline);
@@ -283,7 +315,7 @@ export function BriefingMaterialPage() {
       setTokenLedger(planning.tokenLedger);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
-      setStep("topic");
+      setStep("manuscript");
     } finally {
       setBusy(false);
       setStatus(null);
@@ -381,9 +413,35 @@ export function BriefingMaterialPage() {
     input: "1. 조건",
     data: "2. 데이터",
     topic: "3. 주제",
-    plan: "4. 슬라이드 기획",
-    studio: "5. 편집·보내기",
+    manuscript: "4. 줄글 검토",
+    plan: "5. 슬라이드 기획",
+    studio: "6. 편집·보내기",
   };
+
+  if (step === "manuscript" && data && selectedTopic && foundationReport) {
+    return (
+      <div className="min-h-screen bg-slate-50 px-4 py-8 sm:px-6">
+        <Link to="/" className="mb-4 inline-block text-xs text-indigo-600 hover:underline">
+          ← 홈
+        </Link>
+        <ManuscriptReviewPage
+          input={dataPlan}
+          data={data}
+          topic={selectedTopic}
+          report={foundationReport}
+          onReportChange={(r) => setFoundationReport(r)}
+          attachmentNames={attachmentNames}
+          tokenLedger={tokenLedger}
+          busy={busy}
+          status={status}
+          error={err}
+          onRegenerate={() => void handleWriteManuscript()}
+          onContinue={() => void handleStartSlidePlanning()}
+          onBack={() => setStep("topic")}
+        />
+      </div>
+    );
+  }
 
   if (step === "plan") {
     return (
@@ -402,7 +460,7 @@ export function BriefingMaterialPage() {
           status={status}
           error={err}
           onProduce={() => void handleProduceSlides()}
-          onBack={() => setStep("topic")}
+          onBack={() => setStep("manuscript")}
         />
       </div>
     );
@@ -422,7 +480,7 @@ export function BriefingMaterialPage() {
         busyExport={exportBusy}
         onExportPptx={() => downloadPptxOnly()}
         onExportBundle={() => downloadAll()}
-        onBack={() => setStep("topic")}
+        onBack={() => setStep("plan")}
         onRetry={selectedTopic && slidePlans.length ? () => void handleProduceSlides() : undefined}
       />
     );
@@ -436,7 +494,7 @@ export function BriefingMaterialPage() {
           LocalEdu Master — 지역 맞춤 설명회·상담 자료 반자동 생성
         </p>
         <p className="mt-2 text-xs text-slate-500">
-          조건·수집 → 주제 → 슬라이드별 기획 → 제작·편집 → PPTX보내기
+          수집 → 주제 선택 → 줄글 검토 → 슬라이드 기획 → 제작
         </p>
         <Link to="/" className="mt-2 inline-block text-xs text-indigo-600 hover:underline">
           ← 홈
@@ -684,7 +742,7 @@ export function BriefingMaterialPage() {
           </section>
 
           <section className="rounded-2xl border bg-white p-5 shadow-sm">
-            <h2 className="text-sm font-bold">Design Layer · 주제 선택 (5대 점수)</h2>
+            <h2 className="text-sm font-bold">자료집 주제 선택 (수집·목적·핵심주제 반영)</h2>
             <div className="mt-3 space-y-3">
               {topics.map((t) => (
                 <label
@@ -716,17 +774,15 @@ export function BriefingMaterialPage() {
 
             <button
               type="button"
-              disabled={busy || !selectedTopic || storylineLoading}
-              onClick={() => void handleStartPlanning()}
-              className="mt-4 w-full rounded-xl bg-slate-900 py-3 text-sm font-bold text-white disabled:opacity-50"
+              disabled={busy || !selectedTopic}
+              onClick={() => void handleWriteManuscript()}
+              className="mt-4 w-full rounded-xl bg-indigo-600 py-3 text-sm font-bold text-white disabled:opacity-50"
             >
-              {busy
-                ? "슬라이드 기획 생성 중…"
-                : `슬라이드별 기획 · ${pageCount}장 확인 화면으로`}
+              {busy ? "설명자료 줄글 작성 중…" : "설명자료 줄글 작성 · 검토 화면으로"}
             </button>
             <p className="mt-2 text-center text-[11px] text-slate-500">
-              주제·목적에 맞춘 설명회 흐름을 확인한 뒤, 슬라이드별 내용 기획을 수정하고 「제작하기」를
-              누르세요.
+              선택 주제로 종합 레포트(줄글)를 먼저 확인·수정한 뒤, 승인하면 슬라이드 {pageCount}장
+              기획으로 넘어갑니다.
             </p>
           </section>
         </div>

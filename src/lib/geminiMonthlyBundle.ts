@@ -1,6 +1,12 @@
 import type { GrowthMetaState } from "./monthlyGrowthMeta";
 import type { PillarKey } from "./reportAggregates";
 import { pillarLabelsKo } from "./reportAggregates";
+import {
+  applyReportPrivacy,
+  REPORT_NO_PII_PROMPT_RULES,
+  sanitizeReportStudentPii,
+  type ReportPrivacyContext,
+} from "./reportStudentPrivacy";
 import { stripAiPlainText } from "./reportPlainText";
 
 export type MonthlyReportBookContext = {
@@ -144,22 +150,25 @@ async function geminiGenerateText(prompt: string, temperature = 0.55): Promise<G
   };
 }
 
-function contextBlock(ctx: MonthlyReportAIContext): string {
+function contextBlock(ctx: MonthlyReportAIContext, privacy?: ReportPrivacyContext): string {
   const s1 = ctx.growthMeta.step1.join(", ");
   const s2 = ctx.growthMeta.step2.join(", ");
   const s3 = ctx.growthMeta.step3.trim() || "(없음)";
   const scoreLines = (["reading", "thinking", "discussion", "writing", "growth"] as const)
     .map((k) => `- ${pillarLabelsKo[k]}: ${ctx.scores[k]}점 — 교사 코멘트: ${ctx.pillarComments[k]?.trim() || "(없음)"}`)
     .join("\n");
-  return `[1단 활동 — 무엇을 했는가]\n${s1}\n\n[2단 태도·행동]\n${s2}\n\n[3단 교사 메모]\n${s3}\n\n[이달의 글쓰기]\n${ctx.writingImageNote}\n\n${bookContextSection(ctx.book)}\n\n[5대 역량 점수·코멘트]\n${scoreLines}\n\n[선생님이 적은 따뜻한 한마디 초안]\n${ctx.warmMessageDraft.trim() || "(없음)"}`;
+  const raw = `[1단 활동 — 무엇을 했는가]\n${s1}\n\n[2단 태도·행동]\n${s2}\n\n[3단 교사 메모]\n${s3}\n\n[이달의 글쓰기]\n${ctx.writingImageNote}\n\n${bookContextSection(ctx.book)}\n\n[5대 역량 점수·코멘트]\n${scoreLines}\n\n[선생님이 적은 따뜻한 한마디 초안]\n${ctx.warmMessageDraft.trim() || "(없음)"}`;
+  return privacy ? sanitizeReportStudentPii(raw, privacy) : raw;
 }
 
-function promptGrowthMoment(ctx: MonthlyReportAIContext): string {
+function promptGrowthMoment(ctx: MonthlyReportAIContext, privacy?: ReportPrivacyContext): string {
   return `당신은 한국의 독서·논술 학원에서 학부모에게 보내는 월간 성장 리포트를 작성하는 교사입니다.
+
+${REPORT_NO_PII_PROMPT_RULES}
 
 아래는 한 학생에 대한 이번 달 **전체 관찰·입력**입니다. 이 내용만 근거로 작성하세요. 없는 사실은 지어내지 마세요.
 
-${contextBlock(ctx)}
+${contextBlock(ctx, privacy)}
 
 작업: **이달의 성장 모멘트** 본문만 작성합니다.
 - 정확히 **3개 문단**, 문단 사이는 빈 줄 한 줄(실제 줄바꿈)만 사용합니다.
@@ -171,32 +180,43 @@ ${contextBlock(ctx)}
 - 제목·번호·불릿 없이 본문만.`;
 }
 
-function promptCompetency(ctx: MonthlyReportAIContext): string {
+function promptCompetency(ctx: MonthlyReportAIContext, privacy?: ReportPrivacyContext): string {
   return `당신은 초등·중학 연령 독서 논술 학원의 교육 전문가입니다.
+
+${REPORT_NO_PII_PROMPT_RULES}
 
 아래는 한 학생의 이번 달 **전체 입력**입니다. 이것만 근거로 분석하세요.
 
-${contextBlock(ctx)}
+${contextBlock(ctx, privacy)}
 
 작업: **관찰 기반 역량 종합 분석** 텍스트만 작성합니다.
 
 형식(반드시 준수):
-- 마크다운(예: #, ##, **, 불릿)을 쓰지 마세요. 일반 문장과 문단만 사용합니다.
+- 마크다운(예: #, ##, **, 불릿)을 쓰지 마세요. 아래 **[강점]** / **[보완점]** 라벨만 예외로 그대로 씁니다.
 - 백슬래시나 '\\n' 같은 이스케이프 문자열을 출력하지 마세요.
-- 먼저 "강점 영역" 이라는 짧은 한 줄 제목처럼 보이지 않게, 첫 문단에서 점수·코멘트 근거로 가장 두드러진 강점 역량 하나만 집중해 서술합니다(여러 역량을 나열하지 마세요).
-- 빈 줄 하나 다음 두 번째 문단에서, 상대적으로 보완이 필요한 역량 하나만 집중해 서술하고, 학부모가 집에서 도울 수 있는 짧은 실천을 덧붙입니다(과장·낙인 금지).
+- **강점과 보완을 한 문단에 섞지 마세요.** 「한편,」「반면,」으로 한 덩어리에 이어 쓰지 말고, 반드시 아래 두 블록으로 나눕니다.
+
+[강점]
+(이 블록에는 강점·칭찬·기대만. 점수·코멘트 근거로 가장 두드러진 역량 하나에 집중. 보완·아쉬운 점·집에서 할 일은 쓰지 마세요.)
+
+[보완점]
+(이 블록에는 보완이 필요한 역량 하나와 학부모가 집에서 도울 수 있는 짧은 실천만. 강점 내용을 반복하지 마세요. 과장·낙인 금지.)
+
+- [강점]과 [보완점] 사이에는 빈 줄을 하나 넣어도 되고, 넣지 않아도 됩니다.
 - 레이더 차트는 별도로 그려지므로 차트 언급 없이 텍스트만 작성합니다.`;
 }
 
-function promptWarm(ctx: MonthlyReportAIContext): string {
+function promptWarm(ctx: MonthlyReportAIContext, privacy?: ReportPrivacyContext): string {
   return `당신은 학부모에게 마음이 전해지도록 글을 다듬어 주는 교사입니다.
+
+${REPORT_NO_PII_PROMPT_RULES}
 
 아래는 한 학생에 대한 이번 달 전체 맥락과, 선생님이 적어 둔 **따뜻한 한마디 초안**입니다.
 
-${contextBlock(ctx)}
+${contextBlock(ctx, privacy)}
 
 작업: 초안의 뜻과 온기를 살리되, 전체 맥락(활동·태도·도서·역량)을 은은히 녹인 **완성 한마디**를 2~4문장으로 작성합니다.
-- 학생을 지칭할 때는 "○○ 학생"처럼 일반적 호칭 사용(실명 없음).
+- 아이를 지칭할 때는 **「아이」「우리 아이」** 등 비식별 호칭만 사용하세요.
 - 마크다운(**, # 등)과 백슬래시 이스케이프를 쓰지 마세요. 일반 문장만.
 - 제목·인용부호 장식 없이 본문만.`;
 }
@@ -204,17 +224,18 @@ ${contextBlock(ctx)}
 /** 성장 모멘트·역량 분석·따뜻한 한마디를 병렬 생성 */
 export async function generateMonthlyReportBundle(
   ctx: MonthlyReportAIContext,
+  privacy?: ReportPrivacyContext,
 ): Promise<MonthlyReportAIResult> {
   const [growthRes, competencyRes, warmRes] = await Promise.all([
-    geminiGenerateText(promptGrowthMoment(ctx), 0.62),
-    geminiGenerateText(promptCompetency(ctx), 0.5),
-    geminiGenerateText(promptWarm(ctx), 0.68),
+    geminiGenerateText(promptGrowthMoment(ctx, privacy), 0.62),
+    geminiGenerateText(promptCompetency(ctx, privacy), 0.5),
+    geminiGenerateText(promptWarm(ctx, privacy), 0.68),
   ]);
   const parts = [growthRes, competencyRes, warmRes];
   return {
-    growthMoment: growthRes.text,
-    competencyAnalysis: competencyRes.text,
-    warmMessage: warmRes.text,
+    growthMoment: applyReportPrivacy(growthRes.text, privacy),
+    competencyAnalysis: applyReportPrivacy(competencyRes.text, privacy),
+    warmMessage: applyReportPrivacy(warmRes.text, privacy),
     tokenUsage: {
       inputTokens: parts.reduce((sum, p) => sum + p.promptTokenCount, 0),
       outputTokens: parts.reduce((sum, p) => sum + p.candidatesTokenCount, 0),

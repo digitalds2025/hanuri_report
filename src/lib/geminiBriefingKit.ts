@@ -63,34 +63,87 @@ function normalizeScores(raw: Record<string, unknown>): TopicScoreBreakdown {
   };
 }
 
-const TOPIC_SYSTEM = `당신은 설명회 주제 선정 엔진입니다.
-이미 수집된 공식 데이터 스캔 결과만 근거로 주제 3~5개를 제안하고 5대 기준으로 점수를 매깁니다.
+const TOPIC_SYSTEM = `당신은 지역 맞춤형 설명회·자료집의 "주제" 선정 엔진입니다.
+이미 수집된 공식 데이터(facts)만 근거로, 이용자가 설정한 **필수 조건(지역·학년)·목적·핵심 주제**에 맞는 자료집 주제 3~5개를 제안합니다.
 
-[목적 — 사용자 고정]
-- 신규 모집(신입 모집): 문제 인식·평가 변화·학습 방식 전환, 상담 CTA
-- 기존 재원생 관리(기존 학생): 성과 정리·다음 학년 공백 리스크·재등록
+각 주제는 이후 "줄글 레포트 → 슬라이드 N장 분할"의 제목이 됩니다. 추상적 슬로건보다 수집 fact에 맞는 구체 주제(학군·평가·정책·학교명 등)를 쓰세요.
 
-[5대 점수화 — 각 0~100, 수집 facts와 목적·학년에 근거]
-1. dataReliability: 공식 통계·학교 공개 자료로 문서 작성 가능한가
-2. localRelevance: 해당 지역 학부모 로컬 이슈(학군·지자체 프로그램) 반영
-3. targetAlignment: 초등=문해력·과정평가, 중등=내신·고교구조, 고등=입시 — 학년에 맞는가
-4. consultationConversion: 설명회 후 1:1 상담·진단 신청으로 이어지기 쉬운가
-5. brandIntegration: 독서·토론·논술(읽기·생각·말하기·쓰기)로 자연스럽게 연결되는가
+[5대 점수화 — 각 0~100]
+1. dataReliability 2. localRelevance 3. targetAlignment 4. consultationConversion 5. brandIntegration
 
-금지: 스캔에 없는 학교명·수치 창작, 서열·단정, D등급 단독 근거
+금지: 스캔에 없는 학교명·수치 창작, 서열·단정
 
-JSON만 출력:
+반드시 JSON만, topics 배열 3~5개:
 {
   "topics": [{
     "id": "t1",
-    "title": "주제",
+    "title": "자료집 주제",
     "summary": "2문장",
-    "rationale": "5대 기준 근거 요약",
-    "primarySources": ["URL 또는 기관명"],
+    "rationale": "목적·핵심주제·fact 근거",
+    "primarySources": ["출처"],
     "scores": { "dataReliability": 0, "localRelevance": 0, "targetAlignment": 0, "consultationConversion": 0, "brandIntegration": 0 },
     "suggestedSlideCount": 10
   }]
 }`;
+
+function extractTopicsArray(parsed: unknown): unknown[] {
+  if (Array.isArray(parsed)) return parsed;
+  if (!parsed || typeof parsed !== "object") return [];
+  const o = parsed as Record<string, unknown>;
+  if (Array.isArray(o.topics)) return o.topics;
+  if (Array.isArray(o.topicList)) return o.topicList;
+  if (Array.isArray(o.recommendations)) return o.recommendations;
+  return [];
+}
+
+export function fallbackBookletTopics(
+  input: BriefingMaterialFormInput,
+  officialScan: OfficialDataScanResult,
+  coreTopicLabels: string[] = [],
+): BriefingTopicCandidate[] {
+  const region = `${input.region} ${input.subRegion}`.trim();
+  const grade = `${input.schoolLevel} ${input.targetGrade}`;
+  const purpose =
+    input.purposeCustom?.trim() ||
+    (input.parentAudience === "신입 모집" ? "신규 모집" : "재원생·승급");
+
+  const fromFacts = officialScan.facts.slice(0, 3).map((f, i) => ({
+    id: `fallback-fact-${i + 1}`,
+    title: `${region} · ${f.category} — ${grade} 학부모 자료`,
+    summary: f.fact.slice(0, 200),
+    rationale: `수집 fact 기반 폴백 주제 (${purpose})`,
+    primarySources: f.sourceTitle ? [f.sourceTitle] : ["학교알리미"],
+    scores: {
+      dataReliability: 75,
+      localRelevance: 80,
+      targetAlignment: 70,
+      consultationConversion: 65,
+      brandIntegration: 60,
+    },
+    totalScore: 70,
+    suggestedSlideCount: input.pageCount,
+  }));
+
+  if (fromFacts.length >= 2) return fromFacts;
+
+  const chips = coreTopicLabels.length ? coreTopicLabels : ["지역 학교·평가", "학부모 안내"];
+  return chips.slice(0, 4).map((label, i) => ({
+    id: `fallback-chip-${i + 1}`,
+    title: `${region} ${grade} — ${label}`,
+    summary: `${purpose} 목적에 맞춘 ${label} 중심 설명회·자료집`,
+    rationale: "AI 주제 JSON 비어 있음 — 핵심 주제·지역 조건 기반 폴백",
+    primarySources: ["학교알리미", "교육청"],
+    scores: {
+      dataReliability: 60,
+      localRelevance: 75,
+      targetAlignment: 70,
+      consultationConversion: 60,
+      brandIntegration: 55,
+    },
+    totalScore: 64,
+    suggestedSlideCount: input.pageCount,
+  }));
+}
 
 /** Step 2-A: 지역만 스캔 (시·도·구 선택 직후) */
 export async function runRegionOfficialDataScan(
@@ -110,28 +163,52 @@ export async function runSchoolSupplementScan(
   return supplementOfficialDataScan(prior, input, attachmentText, onProgress);
 }
 
-/** Step 3: 스캔 결과 기반 주제 추천·5대 점수화 */
+/** Step 3: 수집 데이터 + 이용자 조건 → 자료집 주제 후보 */
 export async function recommendBriefingTopics(
   referenceText: string,
   input: BriefingMaterialFormInput,
   officialScan: OfficialDataScanResult,
-): Promise<{ topics: BriefingTopicCandidate[]; usage: GeminiTokenUsage }> {
+  options?: { coreTopicLabels?: string[] },
+): Promise<{
+  topics: BriefingTopicCandidate[];
+  usage: GeminiTokenUsage;
+  usedFallback: boolean;
+}> {
   const scanInput: BriefingMaterialFormInput = { ...input, officialScan };
+  const chipLine = options?.coreTopicLabels?.length
+    ? `\n[이용자 핵심 주제] ${options.coreTopicLabels.join(", ")}`
+    : "";
   const userPrompt = `${formContextBlock(scanInput)}
+${chipLine}
 
 [B등급 첨부 발췌]
 ${referenceText ? referenceText.slice(0, 6000) : "(없음)"}
 
 수집 facts ${officialScan.facts.length}건, 관내 학교 ${officialScan.discoveredSchools.length}곳.
-위 공식 데이터만 사용해 주제 3~5개와 5대 점수를 JSON으로 제안하세요.`;
+위 공식 데이터·필수 조건·목적·핵심 주제에 맞는 자료집 주제 3~5개를 JSON topics 배열로 제안하세요.`;
 
-  const { data: parsed, usage } = await geminiGenerateJson<{ topics?: unknown }>(
-    TOPIC_SYSTEM,
-    userPrompt,
-    0.35,
-  );
-  const arr = Array.isArray(parsed.topics) ? parsed.topics : [];
-  if (!arr.length) throw new Error("주제 추천 결과가 비어 있습니다.");
+  let usage: GeminiTokenUsage = { inputTokens: 0, outputTokens: 0 };
+  let arr: unknown[] = [];
+
+  try {
+    const res = await geminiGenerateJson<{ topics?: unknown }>(
+      TOPIC_SYSTEM,
+      userPrompt,
+      0.35,
+    );
+    usage = res.usage;
+    arr = extractTopicsArray(res.data);
+  } catch (e) {
+    console.warn("[recommendBriefingTopics] AI 실패, 폴백 주제", e);
+  }
+
+  if (!arr.length) {
+    return {
+      topics: fallbackBookletTopics(input, officialScan, options?.coreTopicLabels),
+      usage,
+      usedFallback: true,
+    };
+  }
 
   const topics = arr
     .map((item, i) => {
@@ -156,7 +233,7 @@ ${referenceText ? referenceText.slice(0, 6000) : "(없음)"}
     })
     .sort((a, b) => b.totalScore - a.totalScore);
 
-  return { topics, usage };
+  return { topics, usage, usedFallback: false };
 }
 
 const OUTLINE_FILL_SYSTEM = `당신은 마스터 아웃라인 '조립' 엔진입니다.

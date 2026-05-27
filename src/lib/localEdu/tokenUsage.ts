@@ -9,7 +9,9 @@ export type LocalEduTokenLedger = {
   dataCollection: StageTokenUsage;
   /** Design Layer · 주제 선정 */
   topicSelection: StageTokenUsage;
-  /** Design Layer · 마스터 아웃라인(슬라이드 기획) */
+  /** Design Layer · 설명자료 줄글(종합 레포트) */
+  manuscript: StageTokenUsage;
+  /** Design Layer · 슬라이드별 기획 */
   slidePlanning: StageTokenUsage;
   /** Generation Layer · 슬라이드 조립 + 상담키트 */
   slideProduction: StageTokenUsage;
@@ -23,6 +25,7 @@ export function emptyTokenLedger(): LocalEduTokenLedger {
   return {
     dataCollection: emptyStageUsage(),
     topicSelection: emptyStageUsage(),
+    manuscript: emptyStageUsage(),
     slidePlanning: emptyStageUsage(),
     slideProduction: emptyStageUsage(),
   };

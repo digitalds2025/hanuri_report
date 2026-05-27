@@ -1,3 +1,11 @@
+import {
+  buildBookAiMetadataPrompt,
+  ensureQualityBookAiMetadata,
+  hasBookTextCorpus,
+  parseBookAiMetadataFromModelText,
+  parseYes24CategoryForAiCategory,
+} from "./bookAiMetadataParse.ts";
+
 /**
  * YES24 검색·상세 스크래핑 + Gemini로 ai_category / ai_keywords 추출.
  * 실행 위치: 로컬 `npm run dev`(Vite 플러그인) 또는 Cloud Run(`cloud-run/yes24-api/server.ts`가 이 모듈을 import).
@@ -241,36 +249,32 @@ async function coverImageUrlFromDetail(page: Page, onLog?: (message: string) => 
 }
 
 async function geminiExtractAiFields(
-  bundle: { category: string | null; introduce: string | null; author_cmt: string | null; pub_cmt: string | null },
+  bundle: {
+    title?: string | null;
+    category: string | null;
+    introduce: string | null;
+    author_cmt: string | null;
+    pub_cmt: string | null;
+  },
   apiKey: string,
   model: string,
   onLog?: (message: string) => void,
 ): Promise<{ ai_category: string | null; ai_keywords: string[] }> {
-  const parts = [
-    bundle.category ? `[카테고리]\n${bundle.category}` : null,
-    bundle.introduce ? `[책 소개]\n${bundle.introduce.slice(0, 12000)}` : null,
-    bundle.author_cmt ? `[만든이 코멘트]\n${bundle.author_cmt.slice(0, 8000)}` : null,
-    bundle.pub_cmt ? `[출판사 리뷰]\n${bundle.pub_cmt.slice(0, 8000)}` : null,
-  ].filter(Boolean);
-  const blob = parts.join("\n\n");
-  if (!blob.trim()) {
-    onLog?.("읽어온 글이 너무 적어서 카테고리·해시태그는 비워둘게요.");
-    return { ai_category: null, ai_keywords: [] };
+  if (!hasBookTextCorpus(bundle)) {
+    onLog?.("소개·코멘트가 없어 키워드는 비우고, YES24 분야로 분류만 보완할게요.");
+    return {
+      ai_category: parseYes24CategoryForAiCategory(bundle.category),
+      ai_keywords: [],
+    };
   }
 
-  onLog?.("이제 수집한 내용을 토대로 카테고리와 해시태그를 만들게요!");
-  const prompt = `당신은 도서 메타데이터를 정리하는 도우미입니다. 아래 텍스트는 모두 YES24에서 가져온 "카테고리·책 소개·만든이 코멘트·출판사 리뷰" 일부입니다.
-이 네 가지 블록에 실제로 적힌 내용만 근거로, 독서 지도용으로 쓸 수 있게 간단히 분류·키워드를 뽑아 주세요.
-
-출력 형식은 JSON 한 덩어리뿐이어야 합니다. 마크다운·코드펜스·설명 문장 금지.
-형식:
-{"ai_category":"한 줄 한국어(예: 청소년 소설 / 과학 교양 등)","ai_keywords":["키워드1","키워드2"]}
-- ai_keywords는 한국어 위주로 5~12개, 짧은 명사구.
-- 원문에 없는 사실·수상 내역·판매량 등은 만들지 마세요.
-
---- 내용 시작 ---
-${blob}
---- 내용 끝 ---`;
+  onLog?.("소개·저자·출판사 글을 종합해 분류와 대표 키워드 2개를 만들게요!");
+  const prompt = buildBookAiMetadataPrompt({
+    category: bundle.category,
+    introduce: bundle.introduce,
+    author_cmt: bundle.author_cmt,
+    pub_cmt: bundle.pub_cmt,
+  });
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
   const res = await fetch(url, {
@@ -281,6 +285,7 @@ ${blob}
       generationConfig: {
         temperature: 0.35,
         maxOutputTokens: 1024,
+        responseMimeType: "application/json",
       },
     }),
   });
@@ -303,37 +308,28 @@ ${blob}
   const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   const trimmed = text.trim();
   if (!trimmed) {
-    onLog?.("응답이 비어 있어서 카테고리·해시태그는 건너뛸게요.");
+    onLog?.("Gemini 응답이 비어 있어서 카테고리·키워드를 만들지 못했어요. API 키·모델 설정을 확인해 주세요.");
     return { ai_category: null, ai_keywords: [] };
   }
 
-  let parsed: { ai_category?: unknown; ai_keywords?: unknown };
-  try {
-    parsed = JSON.parse(trimmed) as { ai_category?: unknown; ai_keywords?: unknown };
-  } catch {
-    let t = trimmed;
-    const fence = /^```(?:json)?\s*([\s\S]*?)```/m.exec(t);
-    if (fence) t = fence[1]!.trim();
-    const start = t.indexOf("{");
-    const end = t.lastIndexOf("}");
-    if (start < 0 || end <= start) {
-      return { ai_category: null, ai_keywords: [] };
-    }
-    parsed = JSON.parse(t.slice(start, end + 1)) as { ai_category?: unknown; ai_keywords?: unknown };
+  const parsed = parseBookAiMetadataFromModelText(trimmed);
+  const finalized = ensureQualityBookAiMetadata(parsed, { yes24Category: bundle.category });
+  if (!finalized.ai_category && finalized.ai_keywords.length === 0) {
+    onLog?.("AI 분류·키워드 JSON 해석에 실패했어요. .env 의 VITE_GEMINI_API_KEY·모델을 확인한 뒤 도서 찾기를 다시 시도해 주세요.");
+    return { ai_category: null, ai_keywords: [] };
   }
-
-  const ai_category =
-    typeof parsed.ai_category === "string" && parsed.ai_category.trim() ? parsed.ai_category.trim() : null;
-  let ai_keywords: string[] = [];
-  if (Array.isArray(parsed.ai_keywords)) {
-    ai_keywords = parsed.ai_keywords
-      .filter((x): x is string => typeof x === "string")
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .slice(0, 16);
+  if (!finalized.ai_category) {
+    onLog?.("AI 분류(ai_category)가 비어 있어 YES24 분야로만 보완했어요.");
   }
-  onLog?.("카테고리와 해시태그까지 정리했어요!");
-  return { ai_category, ai_keywords };
+  if (finalized.ai_keywords.length < 2) {
+    onLog?.("소개·코멘트에서 대표 키워드 2개를 뽑지 못했어요. 도서 찾기를 다시 시도해 주세요.");
+  }
+  onLog?.(
+    finalized.ai_category
+      ? `카테고리「${finalized.ai_category}」·키워드 ${finalized.ai_keywords.length}개까지 정리했어요!`
+      : `키워드 ${finalized.ai_keywords.length}개까지 정리했어요!`,
+  );
+  return finalized;
 }
 
 function networkDeniedHint(): string {
@@ -479,7 +475,7 @@ export async function searchYes24AndAnalyze(
       onLog?.(pub_cmt ? "출판사 소개도 수집했어요!" : "출판사 소개는 비어 있었어요.");
 
       const ai = await geminiExtractAiFields(
-        { category, introduce, author_cmt, pub_cmt },
+        { title: finalTitle, category, introduce, author_cmt, pub_cmt },
         gemini.apiKey,
         gemini.model,
         onLog,

@@ -1,9 +1,16 @@
+import {
+  BOOK_AI_KEYWORD_COUNT,
+  bookAiKeywordsFromJson,
+  ensureQualityBookAiMetadata,
+  parseYes24CategoryForAiCategory,
+} from "./bookAiMetadataParse";
+import { fetchBookByTitleExact } from "./fetchBookByTitle";
 import { localUpsertBook, type Yes24SearchResultPayload } from "./localStoreApi";
 import { isSupabaseConfigured, supabase } from "./supabaseClient";
 import type { Json } from "./types/database";
 
-/** `books.ai_keywords` JSONB — DB에는 최대 이 개수만 저장 */
-const MAX_BOOK_AI_KEYWORDS = 2;
+/** `books.ai_keywords` — 소개·코멘트 종합 대표어 (정확히 2개) */
+const MAX_BOOK_AI_KEYWORDS = BOOK_AI_KEYWORD_COUNT;
 
 function normalizeAiKeywordsForBooksTable(kw: Json): Json {
   if (!Array.isArray(kw)) return kw;
@@ -30,7 +37,13 @@ export type BookUpsertInput = {
 };
 
 export function bookUpsertInputFromYes24(r: Yes24SearchResultPayload): BookUpsertInput {
-  const kwJson = r.ai_keywords as unknown as Json;
+  const meta = ensureQualityBookAiMetadata(
+    {
+      ai_category: (r.ai_category ?? "").trim() || null,
+      ai_keywords: Array.isArray(r.ai_keywords) ? r.ai_keywords : [],
+    },
+    { yes24Category: r.category },
+  );
   return {
     title: r.title.trim(),
     author: r.author.trim(),
@@ -41,8 +54,8 @@ export function bookUpsertInputFromYes24(r: Yes24SearchResultPayload): BookUpser
     introduce: (r.introduce ?? "").trim() || null,
     author_cmt: (r.author_cmt ?? "").trim() || null,
     pub_cmt: (r.pub_cmt ?? "").trim() || null,
-    ai_category: (r.ai_category ?? "").trim() || null,
-    ai_keywords: kwJson,
+    ai_category: meta.ai_category,
+    ai_keywords: meta.ai_keywords as unknown as Json,
   };
 }
 
@@ -52,7 +65,18 @@ export type PersistBookUpsertResult =
 
 /** Supabase `books`가 있으면 upsert, 없으면 개발 모드에서만 로컬 파일 DB upsert */
 export async function persistBookUpsertRow(row: BookUpsertInput): Promise<PersistBookUpsertResult> {
-  const ai_keywords = normalizeAiKeywordsForBooksTable(row.ai_keywords);
+  const existing = await fetchBookByTitleExact(row.title.trim());
+  const incomingKw = bookAiKeywordsFromJson(normalizeAiKeywordsForBooksTable(row.ai_keywords));
+  const keptKw = incomingKw.length > 0 ? incomingKw : bookAiKeywordsFromJson(existing?.ai_keywords);
+  const ai_keywords = normalizeAiKeywordsForBooksTable(keptKw as unknown as Json);
+
+  const ai_category =
+    row.ai_category?.trim() ||
+    existing?.ai_category?.trim() ||
+    parseYes24CategoryForAiCategory(row.category) ||
+    parseYes24CategoryForAiCategory(existing?.category) ||
+    null;
+
   const payload = {
     title: row.title.trim(),
     author: row.author.trim(),
@@ -63,7 +87,7 @@ export async function persistBookUpsertRow(row: BookUpsertInput): Promise<Persis
     introduce: row.introduce?.trim() || null,
     author_cmt: row.author_cmt?.trim() || null,
     pub_cmt: row.pub_cmt?.trim() || null,
-    ai_category: row.ai_category?.trim() || null,
+    ai_category,
     ai_keywords,
   };
 

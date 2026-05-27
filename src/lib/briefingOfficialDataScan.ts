@@ -36,6 +36,25 @@ type BatchParseResult = {
   summary?: string;
 };
 
+function inferFactGrade(
+  f: NonNullable<BatchParseResult["facts"]>[number],
+  batchId: string,
+): DataTrustGrade {
+  const hay = `${f.sourceTitle ?? ""} ${f.sourceUri ?? ""} ${f.fact ?? ""}`;
+  if (/조선일보|중앙일보|한겨레|동아일보|맘카페|블로그|티스토리|네이버 카페/i.test(hay)) {
+    return "D";
+  }
+  if (f.grade === "B" || f.grade === "C" || f.grade === "D") return f.grade as DataTrustGrade;
+  if (
+    batchId === "official_tier1" ||
+    batchId === "district_structure" ||
+    /schoolinfo|교육청|kess|어디가|입학처/i.test(hay)
+  ) {
+    return "A";
+  }
+  return "B";
+}
+
 function toOfficialFact(
   f: NonNullable<BatchParseResult["facts"]>[number],
   batchId: string,
@@ -47,7 +66,7 @@ function toOfficialFact(
     sourceTitle: f.sourceTitle,
     sourceUri: f.sourceUri,
     sourceExcerpt: f.sourceExcerpt?.trim() || undefined,
-    grade: (f.grade === "B" ? "B" : "A") as DataTrustGrade,
+    grade: inferFactGrade(f, batchId),
   };
 }
 

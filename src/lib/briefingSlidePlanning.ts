@@ -1,13 +1,19 @@
+import { filterFactsForPlanning, matchFactsToDraft } from "./briefingFactQuality";
 import { buildFactCatalog } from "./briefingSlidePlanningFacts";
+import {
+  contextSetsToScreenChunks,
+  normalizeSlidePlan,
+} from "./briefingSlidePlanNormalize";
 import type {
   BriefingLayoutSlide,
   BriefingMaterialFormInput,
+  BriefingPlanningArtifact,
   BriefingSlidePlan,
   BriefingStorylineBrief,
+  BriefingTopicCandidate,
+  SlideContentDraft,
   MasterOutline,
-  ScreenChunk,
   SlideDataRef,
-  StoryPhase,
 } from "./briefingMaterialTypes";
 import { geminiGenerateJson, type GeminiTokenUsage } from "./geminiClient";
 import {
@@ -15,23 +21,101 @@ import {
   applyStorylinePhases,
   buildPlansForPageCount,
   extractHeroMetric,
-  getSlideContentPlan,
+  layoutForContent,
   normalizePlanCount,
-  toNounKeyword,
   truncate,
+  truncateAtWord,
 } from "./briefingStorylinePlanning";
 
-const PER_SLIDE_PLAN_SYSTEM = `설명회 슬라이드별 기획 엔진.
+function storyPhaseForIndex(index: number, total: number): "intro" | "development" | "climax" | "closing" {
+  const r = index / total;
+  if (r < 0.15) return "intro";
+  if (r < 0.65) return "development";
+  if (r < 0.85) return "climax";
+  return "closing";
+}
+
+export function buildPlansFromSlideDrafts(
+  drafts: SlideContentDraft[],
+  catalog: SlideDataRef[],
+  topic: BriefingTopicCandidate,
+  regionLabel: string,
+): BriefingSlidePlan[] {
+  return drafts.map((d, i) => {
+    const refs = matchFactsToDraft(d, catalog);
+    const phase = d.storyPhase ?? storyPhaseForIndex(i, drafts.length);
+    const { layout, visualHint } = layoutForContent(undefined, refs, phase);
+    return normalizeSlidePlan(
+      {
+        slideNumber: d.slideNumber || i + 1,
+        title: truncateAtWord(d.title, 72),
+        purpose: topic.title,
+        storyPhase: phase,
+        recommendedLayout: d.suggestedLayout || layout,
+        visualHint: visualHint,
+        dataRefs: refs,
+        speakerNotes: d.narrative,
+        blockId: i === 0 ? "cover" : "data_spotlight",
+      },
+      catalog,
+      regionLabel,
+    );
+  });
+}
+
+export const STRICT_SLIDE_PLAN_RULES = `
+[Strict Generation Rules — 위반 시 실패]
+1. 일반론 금지: "중학교에 가면 공부가 어려워집니다", "수행평가가 중요합니다" 등 뻔한 문장 절대 금지.
+2. 데이터 그라운딩: userPrompt의 corpusMarkdown·fact catalog에서만 인용. 학교명·학생 수·평가 항목명·%·학군명·정책명을 슬라이드별로 강제 배분.
+   - 학군/배정 슬라이드 → 중학교 배정·관내 학교명 fact 집중
+   - 평가 슬라이드 → ○○초/○○중 평가계획서·서술형 비중·영역명 fact 집중
+3. 정보 밀도: 슬라이드당 contextSets 최소 3세트. 각 세트는 phenomenon(2~3문장)·analysis(2문장)·screenKeyword(수치/고유명사) 필수.
+4. 3단 구조: phenomenon(현상) → analysis(분석) → screenKeyword+screenDetail(화면 매핑).
+5. heroFact.headline: 설득용 한 줄(고유명사+수치). properNouns에 학교·기관명 배열.
+6. actionStrategy: 한우리 독서·토론·논술·맞춤 학습으로 연결하는 구체 전략 2~3문장.
+7. consultantInsight: 공식 데이터 이면의 내신 경쟁도·학교 선택 유의점·현장 체감 추론.
+8. speakerNotes: 구어체+인용 fact 원문+수치 (화면보다 길게).
+`;
+
+const PER_SLIDE_PLAN_SYSTEM = `당신은 지역 학원 설명회 슬라이드 기획 시니어 컨설턴트입니다.
 ${STORYLINE_PLANNING_RULES}
+${STRICT_SLIDE_PLAN_RULES}
 
-JSON 필드 (slidePlans 각 항목):
-slideNumber, title, purpose, storyPhase(intro|development|climax|closing),
-recommendedLayout, visualHint, dataRefs[{id,category,fact,...}],
-slideContentPlan(슬라이드 내용 기획·2~4문장), screenChunks[{label,sublabel?,emphasis?}] (최대 3),
-heroMetric?: {value,label,sourceFactId} (METRIC/CHART 시 fact 수치),
-keyMessages (screenChunks와 동일), speakerNotes (구어체+fact 원문+수치)
+반드시 JSON만 출력. slidePlans 배열 길이 = userPrompt의 요청 장수.
 
-JSON만: { "slidePlans": [ ... ] }`;
+각 slidePlan 스키마:
+{
+  "slideNumber": 1,
+  "title": "구체적 슬라이드 제목 (지역·학교명 포함)",
+  "purpose": "1슬라이드 1메시지",
+  "storyPhase": "intro|development|climax|closing",
+  "recommendedLayout": "METRIC|DATA_TABLE|CHART_BAR|COMPARISON|PROCESS_FLOW|...",
+  "visualHint": "big_number|table|chart_bar|comparison|timeline|...",
+  "dataRefs": [{ "id": "fact-0", "category": "...", "fact": "원문 인용" }],
+  "heroFact": {
+    "headline": "예: 의왕 백운중 학생 수 687명 · 2024 학교알리미",
+    "properNouns": ["백운중", "의왕시", "학교알리미"],
+    "metricValue": "687",
+    "metricLabel": "백운중 학생 수",
+    "sourceFactId": "fact-12"
+  },
+  "contextSets": [
+    {
+      "phenomenon": "fact 원문 기반 현상 2~3문장 (고유명사·수치)",
+      "analysis": "학부모 관점 분석 2문장",
+      "screenKeyword": "표/차트에 들어갈 짧은 키워드·수치",
+      "screenDetail": "TABLE/METRIC 보조 셀",
+      "mappedFactId": "fact-3"
+    }
+  ],
+  "actionStrategy": "한우리 솔루션·학습 전략 연결 2~3문장",
+  "consultantInsight": "컨설턴트 추론 1~2문장",
+  "speakerNotes": "발표 멘트 (구어체, fact 인용, 150자 이상)"
+}
+
+contextSets는 슬라이드당 최소 3개, 서로 다른 fact·다른 phenomenon (동일 문장 3회 반복 금지).
+언론·맘카페·블로그 fact 단독 사용 금지. 연도(2024 등)만 metric으로 쓰지 말 것.
+선택 주제 제목과 무관한 슬라이드 금지. METRIC은 %·명·학교명 수치가 있을 때만.`;
 
 export function buildPerSlidePlansSync(
   outline: MasterOutline,
@@ -46,12 +130,21 @@ export async function buildPerSlidePlans(
   input: BriefingMaterialFormInput,
   outline: MasterOutline,
   storyline?: BriefingStorylineBrief | null,
+  corpusMarkdown = "",
+  planningArtifact?: BriefingPlanningArtifact | null,
 ): Promise<{ plans: BriefingSlidePlan[]; usage: GeminiTokenUsage; usedFallback: boolean }> {
   const scan = input.officialScan;
-  const catalog = scan ? buildFactCatalog(scan) : [];
+  const rawCatalog = scan ? buildFactCatalog(scan) : [];
+  const topic = input.selectedTopic;
+  const catalog =
+    topic && rawCatalog.length ? filterFactsForPlanning(rawCatalog, topic) : rawCatalog;
   const targetCount = Math.max(6, Math.min(40, input.pageCount));
+  const regionLabel = `${input.region} ${input.subRegion}`.trim();
 
-  const fallback = buildPlansForPageCount(targetCount, outline, catalog, storyline);
+  const fallback =
+    planningArtifact?.slideDrafts?.length && topic
+      ? buildPlansFromSlideDrafts(planningArtifact.slideDrafts, catalog, topic, regionLabel)
+      : buildPlansForPageCount(targetCount, outline, catalog, storyline);
 
   if (!scan || catalog.length === 0) {
     return {
@@ -67,36 +160,62 @@ export async function buildPerSlidePlans(
     storyPhase: p.storyPhase,
     recommendedLayout: p.recommendedLayout,
     blockId: p.blockId,
+    heroHeadline: p.heroFact?.headline,
   }));
 
-  const userPrompt = `지역: ${input.region} ${input.subRegion}
-주제: ${outline.topicTitle}
+  const corpusExcerpt = corpusMarkdown.slice(0, 22000) || scan.digestText.slice(0, 22000);
+
+  const artifactBlock = planningArtifact
+    ? `
+[종합 레포트 줄글 — 슬라이드·자료집의 원천]
+${planningArtifact.foundationReport.markdown.slice(0, 14000)}
+
+[${input.pageCount}장 분할 초안 — 각 slideDrafts.narrative를 heroFact/contextSets로 구체화]
+${JSON.stringify(planningArtifact.slideDrafts, null, 2)}
+`
+    : "";
+
+  const userPrompt = `지역: ${regionLabel}
+[선택 자료집 주제 — 모든 슬라이드가 이 주제를 증명해야 함]
+${topic?.title ?? outline.topicTitle}
+${topic?.summary ?? ""}
+대상: ${input.schoolLevel} ${input.targetGrade}
+목적: ${input.parentAudience}${input.purposeCustom ? ` (${input.purposeCustom})` : ""}
 기준 시점: ${outline.dataAsOf}
 **요청 슬라이드 수: 정확히 ${targetCount}장** (slidePlans.length === ${targetCount})
 
-${storyline ? `[설명회 흐름 기획]\n${storyline.overview}\n단계: ${storyline.phases.map((p) => `${p.label} ${p.slideCount}장`).join(" → ")}\n` : ""}
+${storyline ? `[설명회 흐름]\n${storyline.overview}\n${storyline.phases.map((p) => `${p.label} ${p.slideCount}장 · ${p.parentEmotion}`).join("\n")}\n` : ""}
+${artifactBlock}
 
-[스토리라인 골격 — 장수·흐름 참고]
+[마스터 아웃라인 블록]
+${JSON.stringify(outline.blocks.map((b) => ({ blockId: b.blockId, title: b.title, purpose: b.purpose })), null, 2)}
+
+[슬라이드 슬롯 골격]
 ${JSON.stringify(slotsPreview, null, 2)}
 
-[fact catalog — dataRefs.id만 사용, 수치는 heroMetric·CHART·TABLE에 반영]
-${JSON.stringify(catalog.slice(0, 50), null, 2)}
+[fact catalog — dataRefs.id만 사용, fact 본문 재인용]
+${JSON.stringify(catalog, null, 2)}
 
-반드시 ${targetCount}개 slidePlans. CHECKLIST 남발 금지. 통계 fact는 METRIC/CHART_BAR/DATA_TABLE.`;
+[corpusMarkdown — 슬라이드별로 fact를 쪼개 배분할 원천. 여기 없는 학교명·수치 창작 금지]
+${corpusExcerpt}
+
+줄글 레포트와 slideDrafts를 일치시키며 PPT 기획(heroFact, contextSets≥3, actionStrategy)으로 재작성하세요. 반드시 ${targetCount}개 slidePlans.`;
 
   try {
     const { data: parsed, usage } = await geminiGenerateJson<{ slidePlans?: unknown }>(
       PER_SLIDE_PLAN_SYSTEM,
       userPrompt,
-      0.3,
+      0.35,
       "writer",
-      32768,
+      65536,
     );
     const arr = Array.isArray(parsed.slidePlans) ? parsed.slidePlans : [];
     if (!arr.length) throw new Error("슬라이드 기획 결과가 비어 있습니다.");
 
     const plans = arr.map((item, i) => {
-      const o = item as Record<string, unknown>;
+      const o = item as Record<string, unknown> & Partial<BriefingSlidePlan>;
+      const fb = fallback[i] ?? fallback[fallback.length - 1];
+
       const rawRefs = Array.isArray(o.dataRefs) ? o.dataRefs : [];
       const dataRefs: SlideDataRef[] = rawRefs
         .map((r) => {
@@ -112,63 +231,28 @@ ${JSON.stringify(catalog.slice(0, 50), null, 2)}
             grade: ref.grade as SlideDataRef["grade"],
           };
         })
-        .filter((r) => r.fact)
-        .slice(0, 5);
+        .filter((r) => r.fact);
 
-      const rawChunks = Array.isArray(o.screenChunks) ? o.screenChunks : [];
-      const screenChunks: ScreenChunk[] = rawChunks
-        .map((c) => {
-          const ch = c as Record<string, unknown>;
-          return {
-            label: truncate(String(ch.label ?? ""), 48),
-            sublabel: ch.sublabel ? truncate(String(ch.sublabel), 40) : undefined,
-            emphasis: Boolean(ch.emphasis),
-          };
-        })
-        .filter((c) => c.label)
-        .slice(0, 3);
-
-      const fb = fallback[i] ?? fallback[fallback.length - 1];
-      const refs = dataRefs.length ? dataRefs : fb.dataRefs;
-      const phase = (o.storyPhase as StoryPhase) ?? fb.storyPhase ?? "development";
-      const layout = String(o.recommendedLayout ?? fb.recommendedLayout);
-      const heroRaw = o.heroMetric as Record<string, unknown> | undefined;
-      let heroMetric = fb.heroMetric;
-      if (heroRaw?.value) {
-        heroMetric = {
-          value: String(heroRaw.value),
-          label: String(heroRaw.label ?? ""),
-          sourceFactId: heroRaw.sourceFactId ? String(heroRaw.sourceFactId) : refs[0]?.id,
-        };
-      } else if (refs[0] && (layout === "METRIC" || layout === "CHART_BAR")) {
-        const m = extractHeroMetric(refs[0].fact);
-        if (m) heroMetric = { ...m, sourceFactId: refs[0].id };
-      }
-
-      const chunks =
-        screenChunks.length > 0
-          ? screenChunks
-          : fb.screenChunks.length > 0
-            ? fb.screenChunks
-            : [{ label: truncate(fb.title, 40) }];
-
-      return {
-        slideNumber: Number(o.slideNumber) || i + 1,
-        title: String(o.title ?? fb.title),
-        purpose: String(o.purpose ?? fb.purpose),
-        storyPhase: phase,
-        recommendedLayout: layout,
-        visualHint: String(o.visualHint ?? fb.visualHint),
-        dataRefs: refs,
-        slideContentPlan: String(
-          o.slideContentPlan ?? o.contentPlan ?? getSlideContentPlan(fb),
-        ),
-        screenChunks: chunks,
-        heroMetric,
-        keyMessages: chunks.map((c) => (c.sublabel ? `${c.label} · ${c.sublabel}` : c.label)),
-        speakerNotes: String(o.speakerNotes ?? fb.speakerNotes),
-        blockId: fb.blockId,
-      } satisfies BriefingSlidePlan;
+      return normalizeSlidePlan(
+        {
+          slideNumber: Number(o.slideNumber) || i + 1,
+          title: String(o.title ?? fb.title),
+          purpose: String(o.purpose ?? fb.purpose),
+          storyPhase: (o.storyPhase as BriefingSlidePlan["storyPhase"]) ?? fb.storyPhase,
+          recommendedLayout: String(o.recommendedLayout ?? fb.recommendedLayout),
+          visualHint: String(o.visualHint ?? fb.visualHint),
+          dataRefs: dataRefs.length ? dataRefs : fb.dataRefs,
+          heroFact: o.heroFact as BriefingSlidePlan["heroFact"],
+          contextSets: o.contextSets as BriefingSlidePlan["contextSets"],
+          actionStrategy: o.actionStrategy ? String(o.actionStrategy) : undefined,
+          consultantInsight: o.consultantInsight ? String(o.consultantInsight) : undefined,
+          speakerNotes: o.speakerNotes ? String(o.speakerNotes) : undefined,
+          blockId: fb.blockId,
+        },
+        catalog,
+        regionLabel,
+        fb,
+      );
     });
 
     let normalized = normalizePlanCount(plans, targetCount, outline, catalog);
@@ -184,28 +268,23 @@ ${JSON.stringify(catalog.slice(0, 50), null, 2)}
   }
 }
 
-const PRODUCE_SYSTEM = `설명회 슬라이드 제작. slidePlans의 screenChunks·heroMetric·dataRefs 수치만 화면에.
+const PRODUCE_SYSTEM = `설명회 슬라이드 제작. slidePlans의 heroFact·contextSets·dataRefs만 화면에.
 ${STORYLINE_PLANNING_RULES}
+${STRICT_SLIDE_PLAN_RULES}
 
 type별 필드:
-- METRIC: title, value(40%+ 크기), label, description(한 줄), speakerNotes
-- CHART_BAR: bars[{label,value,display}] — value는 fact 수치
-- COMPARISON: leftTitle, leftItems(3), rightTitle, rightItems(3) — 명사형
-- PROCESS_FLOW: steps[{title}] — 단계당 1 액션
-- DATA_TABLE: headers, rows — fact 원문 요약
-- STAT_GRID: stats[{value,label,subtext}]
-- ICON_GRID: icons[{icon,label,desc}]
-- CHECKLIST: items 최대 3
-- TITLE, SECTION_HEADER, SOURCES, INSTRUCTOR_INSIGHT
-
+- METRIC: title, value, label, description
+- CHART_BAR: bars[{label,value,display}]
+- DATA_TABLE: headers, rows (contextSets의 phenomenon/screenDetail 활용)
+- COMPARISON, PROCESS_FLOW, STAT_GRID, ICON_GRID
 CHECKLIST 남발 금지. JSON만: { "slides": [ ... ] }`;
 
-function chunksFromPlan(p: BriefingSlidePlan): ScreenChunk[] {
-  if (p.screenChunks?.length) return p.screenChunks.slice(0, 3);
-  return (p.keyMessages ?? []).slice(0, 3).map((m) => ({ label: truncate(m, 48) }));
+function chunksFromPlan(p: BriefingSlidePlan): ReturnType<typeof contextSetsToScreenChunks> {
+  if (p.contextSets?.length >= 3) return contextSetsToScreenChunks(p.contextSets);
+  if (p.screenChunks?.length) return p.screenChunks.slice(0, 5);
+  return (p.keyMessages ?? []).slice(0, 5).map((m) => ({ label: truncate(m, 48) }));
 }
 
-/** 기획 1장 → 미리보기/제작용 레이아웃 */
 export function planToPreviewSlide(plan: BriefingSlidePlan, dataAsOf: string): BriefingLayoutSlide {
   const slides = plansToLayoutSlides([plan], dataAsOf);
   return slides[0] ?? { type: "TITLE", title: plan.title };
@@ -217,12 +296,20 @@ export function plansToLayoutSlides(plans: BriefingSlidePlan[], dataAsOf: string
     const notes = p.speakerNotes;
     const layout = p.recommendedLayout || "GRID_CARDS";
     const refs = p.dataRefs;
+    const hero =
+      p.heroMetric ??
+      (p.heroFact?.metricValue
+        ? {
+            value: p.heroFact.metricValue,
+            label: p.heroFact.metricLabel ?? "",
+          }
+        : null);
 
     if (layout === "TITLE") {
       return {
         type: "TITLE",
         title: p.title,
-        subtitle: chunks[0]?.sublabel ?? chunks[0]?.label ?? truncate(p.purpose, 80),
+        subtitle: p.heroFact?.headline ?? chunks[0]?.label ?? truncate(p.purpose, 80),
         speakerNotes: notes,
         storyPhase: p.storyPhase,
       };
@@ -232,21 +319,21 @@ export function plansToLayoutSlides(plans: BriefingSlidePlan[], dataAsOf: string
         type: "SOURCES",
         title: p.title,
         dataAsOf,
-        items: refs.slice(0, 5).map((d) => truncate(`${d.category}: ${d.fact}`, 90)),
+        items: p.contextSets.slice(0, 6).map((c) => truncate(c.phenomenon, 90)),
         speakerNotes: notes,
       };
     }
     if (layout === "METRIC" || p.visualHint === "big_number") {
-      const hero =
-        p.heroMetric ??
+      const h =
+        hero ??
         (refs[0] ? extractHeroMetric(refs[0].fact) : null) ??
         (chunks[0] ? { value: chunks[0].label, label: chunks[0].sublabel ?? "" } : null);
       return {
         type: "METRIC",
         title: p.title,
-        value: hero?.value ?? "—",
-        label: hero?.label ?? chunks[0]?.sublabel ?? "",
-        description: chunks[1]?.label ?? truncate(refs[0]?.fact ?? "", 80),
+        value: h?.value ?? "—",
+        label: h?.label ?? p.heroFact?.headline ?? "",
+        description: p.contextSets[0]?.analysis ?? chunks[1]?.label ?? "",
         speakerNotes: notes,
         storyPhase: p.storyPhase,
       };
@@ -256,68 +343,53 @@ export function plansToLayoutSlides(plans: BriefingSlidePlan[], dataAsOf: string
       return {
         type: "SECTION_HEADER",
         title: p.title,
-        description: chunks[0]?.label ?? truncate(p.purpose, 80),
+        description: p.heroFact?.headline ?? chunks[0]?.label ?? truncate(p.purpose, 80),
         speakerNotes: notes,
         tone: dark ? "dark" : "default",
         storyPhase: p.storyPhase,
       };
     }
     if (layout === "STAT_GRID" || p.visualHint === "stat_grid") {
-      const stats = refs.length
-        ? refs.slice(0, 4).map((r, i) => {
-            const m = extractHeroMetric(r.fact);
-            return {
-              value: m?.value ?? `${i + 1}`,
-              label: m?.label ?? truncate(toNounKeyword(r.fact), 40),
-              subtext: r.category,
-              icon: ["chart", "school", "users", "target"][i % 4],
-            };
-          })
-        : chunks.map((c, i) => ({
-            value: c.label,
-            label: c.sublabel ?? "",
-            icon: ["chart", "school", "users", "target"][i % 4],
-          }));
-      return { type: "STAT_GRID", title: p.title, stats: stats.slice(0, 4), speakerNotes: notes };
+      const stats = p.contextSets.slice(0, 4).map((c, i) => {
+        const m = extractHeroMetric(c.screenKeyword) ?? extractHeroMetric(c.phenomenon);
+        return {
+          value: m?.value ?? truncate(c.screenKeyword, 12),
+          label: m?.label ?? truncate(c.screenKeyword, 40),
+          subtext: truncate(c.screenDetail ?? c.analysis, 48),
+          icon: ["chart", "school", "users", "target"][i % 4],
+        };
+      });
+      return { type: "STAT_GRID", title: p.title, stats, speakerNotes: notes };
     }
     if (layout === "CHART_BAR" || p.visualHint === "chart_bar") {
-      const bars = refs.length
-        ? refs.slice(0, 4).map((r) => {
-            const m = extractHeroMetric(r.fact);
-            const v = m ? parseFloat(m.value.replace("%", "")) || 50 : 50;
-            return {
-              label: truncate(toNounKeyword(r.category), 32),
-              value: Math.min(100, v),
-              display: m?.value,
-            };
-          })
-        : chunks.map((c, i) => ({
-            label: c.sublabel ?? c.label,
-            value: 40 + i * 15,
-            display: c.label,
-          }));
+      const bars = p.contextSets.slice(0, 4).map((c, i) => {
+        const m = extractHeroMetric(c.screenKeyword) ?? extractHeroMetric(c.phenomenon);
+        const v = m ? parseFloat(m.value.replace("%", "")) || 50 : 40 + i * 12;
+        return {
+          label: truncate(c.screenKeyword, 36),
+          value: Math.min(100, v),
+          display: m?.value ?? c.screenKeyword,
+        };
+      });
       return { type: "CHART_BAR", title: p.title, bars, speakerNotes: notes };
     }
     if (layout === "ICON_GRID" || p.visualHint === "icon_grid") {
-      const icons = chunks.slice(0, 3).map((c, i) => ({
+      const icons = p.contextSets.slice(0, 4).map((c, i) => ({
         icon: ["book", "users", "lightbulb", "target"][i % 4],
-        label: c.label,
-        desc: c.sublabel ?? truncate(refs[i]?.fact ?? "", 50),
+        label: truncate(c.screenKeyword, 36),
+        desc: truncate(c.screenDetail ?? c.analysis, 56),
       }));
       return { type: "ICON_GRID", title: p.title, icons, speakerNotes: notes };
     }
     if (layout === "COMPARISON" || p.visualHint === "comparison") {
-      const mid = Math.ceil(chunks.length / 2) || 1;
+      const half = Math.ceil(p.contextSets.length / 2) || 1;
       return {
         type: "COMPARISON",
         title: p.title,
         leftTitle: "비교 A",
-        leftItems: chunks.slice(0, mid).map((c) => c.label),
+        leftItems: p.contextSets.slice(0, half).map((c) => truncate(c.screenKeyword, 40)),
         rightTitle: "비교 B",
-        rightItems:
-          chunks.slice(mid).map((c) => c.label).length > 0
-            ? chunks.slice(mid).map((c) => c.label)
-            : refs.slice(0, 3).map((r) => truncate(toNounKeyword(r.fact), 36)),
+        rightItems: p.contextSets.slice(half).map((c) => truncate(c.screenKeyword, 40)),
         speakerNotes: notes,
       };
     }
@@ -325,8 +397,11 @@ export function plansToLayoutSlides(plans: BriefingSlidePlan[], dataAsOf: string
       return {
         type: "DATA_TABLE",
         title: p.title,
-        headers: ["항목", "공식 데이터"],
-        rows: refs.slice(0, 4).map((d) => [d.category, truncate(d.fact, 72)]),
+        headers: ["구분", "공식 데이터 / 분석"],
+        rows: p.contextSets.slice(0, 5).map((c) => [
+          truncate(c.screenKeyword, 32),
+          truncate(c.phenomenon, 72),
+        ]),
         speakerNotes: notes,
       };
     }
@@ -334,7 +409,7 @@ export function plansToLayoutSlides(plans: BriefingSlidePlan[], dataAsOf: string
       return {
         type: "CHECKLIST",
         title: p.title,
-        items: chunks.map((c) => c.label).slice(0, 3),
+        items: p.contextSets.slice(0, 4).map((c) => truncate(c.screenKeyword, 48)),
         speakerNotes: notes,
       };
     }
@@ -342,7 +417,10 @@ export function plansToLayoutSlides(plans: BriefingSlidePlan[], dataAsOf: string
       return {
         type: layout === "PROCESS_FLOW" ? "PROCESS_FLOW" : "STEP_CARDS",
         title: p.title,
-        steps: chunks.map((c) => ({ title: c.label, content: c.sublabel ?? "" })),
+        steps: p.contextSets.map((c) => ({
+          title: truncate(c.screenKeyword, 32),
+          content: truncate(c.analysis, 48),
+        })),
         speakerNotes: notes,
       };
     }
@@ -350,7 +428,7 @@ export function plansToLayoutSlides(plans: BriefingSlidePlan[], dataAsOf: string
       return {
         type: "INSTRUCTOR_INSIGHT",
         title: p.title,
-        prompts: chunks.map((c) => c.label),
+        prompts: p.contextSets.map((c) => truncate(c.analysis, 80)),
         speakerNotes: notes,
       };
     }
@@ -358,14 +436,18 @@ export function plansToLayoutSlides(plans: BriefingSlidePlan[], dataAsOf: string
       return {
         type: "GRID_CARDS",
         title: p.title,
-        cards: chunks.map((c) => ({ title: c.label, desc: c.sublabel ?? "" })),
+        cards: p.contextSets.map((c) => ({
+          title: c.screenKeyword,
+          desc: truncate(c.analysis, 80),
+        })),
         speakerNotes: notes,
       };
     }
     return {
-      type: "CHECKLIST",
+      type: "DATA_TABLE",
       title: p.title,
-      items: chunks.map((c) => c.label),
+      headers: ["항목", "내용"],
+      rows: p.contextSets.map((c) => [c.screenKeyword, truncate(c.phenomenon, 72)]),
       speakerNotes: notes,
     };
   });
@@ -377,12 +459,10 @@ export async function produceSlidesFromPlans(
   dataAsOf: string,
 ): Promise<{ slides: BriefingLayoutSlide[]; usage: GeminiTokenUsage; usedFallback: boolean }> {
   const userPrompt = `기준 시점: ${dataAsOf}
-**슬라이드 ${plans.length}장**
+슬라이드 ${plans.length}장
 
-[slidePlans — screenChunks·heroMetric·dataRefs 수치를 화면에 반영]
-${JSON.stringify(plans, null, 2)}
-
-CHECKLIST 연속 금지. METRIC/CHART/DATA_TABLE/COMPARISON/PROCESS_FLOW 우선.`;
+[slidePlans]
+${JSON.stringify(plans, null, 2)}`;
 
   try {
     const { data: parsed, usage } = await geminiGenerateJson<{ slides?: unknown }>(

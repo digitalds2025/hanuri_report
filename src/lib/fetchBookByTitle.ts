@@ -1,5 +1,7 @@
+import { bookAiKeywordsFromJson, bookRowNeedsAiMetadataFill } from "./bookAiMetadataParse";
+import { generateBookAiMetadataFromCorpus } from "./geminiBookAiMetadata";
 import type { MockBook } from "./mockBooks";
-import { localListBooks, type Yes24SearchResultPayload } from "./localStoreApi";
+import { localListBooks, localUpsertBook, type Yes24SearchResultPayload } from "./localStoreApi";
 import { isSupabaseConfigured, supabase } from "./supabaseClient";
 import type { Book } from "./types/database";
 
@@ -30,14 +32,84 @@ export async function fetchBookById(id: string): Promise<Book | null> {
 export async function refreshMockBookAiFromDb(b: MockBook): Promise<MockBook> {
   const bid = b.db_book_id?.trim();
   if (!bid) return b;
-  const row = await fetchBookById(bid);
+  const row = await ensureBookAiMetadataInDb(bid);
   if (!row) return b;
   const canon = bookRowToMockBook(row);
   return {
     ...b,
     ai_category: canon.ai_category ?? null,
     ai_keywords: canon.ai_keywords ?? [],
+    cover_url: canon.cover_url ?? b.cover_url,
+    introduce: canon.introduce ?? b.introduce,
+    author_cmt: canon.author_cmt ?? b.author_cmt,
+    pub_cmt: canon.pub_cmt ?? b.pub_cmt,
   };
+}
+
+/** books 행에 ai 분류·키워드가 없으면 소개 텍스트로 Gemini 생성 후 DB 반영 */
+export async function ensureBookAiMetadataInDb(bookId: string): Promise<Book | null> {
+  let row = await fetchBookById(bookId);
+  if (!row) return null;
+  if (!bookRowNeedsAiMetadataFill(row)) return row;
+
+  const generated = await generateBookAiMetadataFromCorpus({
+    title: row.title,
+    category: row.category,
+    introduce: row.introduce,
+    author_cmt: row.author_cmt,
+    pub_cmt: row.pub_cmt,
+  });
+
+  const existingKw = bookAiKeywordsFromJson(row.ai_keywords);
+  const ai_category = generated.ai_category?.trim() || row.ai_category?.trim() || null;
+  const mergedKeywords =
+    generated.ai_keywords.length > 0 ? generated.ai_keywords : existingKw;
+  if (!ai_category && mergedKeywords.length === 0) return row;
+
+  const payload = {
+    title: row.title,
+    author: row.author,
+    publisher: row.publisher,
+    url: row.url,
+    cover_url: row.cover_url,
+    category: row.category,
+    introduce: row.introduce,
+    author_cmt: row.author_cmt,
+    pub_cmt: row.pub_cmt,
+    ai_category,
+    ai_keywords: mergedKeywords as unknown as import("./types/database").Json,
+  };
+
+  if (isSupabaseConfigured() && supabase) {
+    const { data, error } = await supabase
+      .from("books")
+      .update({
+        ai_category: payload.ai_category,
+        ai_keywords: payload.ai_keywords,
+      })
+      .eq("id", bookId)
+      .select("*")
+      .single();
+    if (error) throw new Error(error.message);
+    return data ?? row;
+  }
+
+  if (import.meta.env.DEV) {
+    await localUpsertBook(payload);
+    row = await fetchBookById(bookId);
+    return row;
+  }
+
+  return row;
+}
+
+/** 선택 도서 목록 — books 테이블 기준으로 ai_category·ai_keywords 동기화 */
+export async function refreshMockBooksAiFromDb(books: MockBook[]): Promise<MockBook[]> {
+  const out: MockBook[] = [];
+  for (const b of books) {
+    out.push(b.db_book_id?.trim() ? await refreshMockBookAiFromDb(b) : b);
+  }
+  return out;
 }
 
 /** `books.title`이 정확히 일치하는 행 1건(최신 `created_at`). 없으면 null */

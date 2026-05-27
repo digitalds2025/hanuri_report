@@ -15,6 +15,7 @@ import { compressImageToDataUrl } from "../lib/imageCompress";
 import { competencyAnalysisToMReportComments } from "../lib/competencyAnalysisSplit";
 import type { MockBook } from "../lib/mockBooks";
 import { useMonthlyReports } from "../hooks/useMonthlyReports";
+import { useStudents } from "../hooks/useStudents";
 import {
   buildMonthlyGrowthMetaJson,
   growthMetaFromJson,
@@ -24,11 +25,19 @@ import {
 import { bookKeywordsToDisplayItems, reportHeaderTitle } from "../lib/monthlyReportDisplay";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 import { uploadWritingImageForStudent } from "../lib/writingImageStorage";
-import { fetchBookById, refreshMockBookAiFromDb } from "../lib/fetchBookByTitle";
+import {
+  fetchBookById,
+  refreshMockBookAiFromDb,
+  refreshMockBooksAiFromDb,
+} from "../lib/fetchBookByTitle";
 import type { MonthlyReportBookContext } from "../lib/geminiMonthlyBundle";
 import { localSaveMonthlyReport } from "../lib/localStoreApi";
 import { pickStrengthWeaknessPointsForReport } from "../lib/pillarStrengthWeakness";
 import { stripAiPlainText } from "../lib/reportPlainText";
+import {
+  buildReportPrivacyContext,
+  sanitizeReportStudentPii,
+} from "../lib/reportStudentPrivacy";
 import type { Json, MonthlyReport } from "../lib/types/database";
 import { parsePillarScores, type PillarKey, pillarLabelsKo } from "../lib/reportAggregates";
 
@@ -172,7 +181,17 @@ export function MonthlyReportNewPage() {
   });
 
   const { reports: savedMonthlyReports, loading: savedMonthlyLoading } = useMonthlyReports(studentId);
+  const { students } = useStudents();
+  const reportPrivacy = useMemo(
+    () =>
+      buildReportPrivacyContext({
+        studentNick: students.find((s) => s.student_id === studentId)?.student_nick,
+        studentId,
+      }),
+    [students, studentId],
+  );
   const hydratedSavedKeyRef = useRef<string | null>(null);
+  const booksAiRefreshKeyRef = useRef<string>("");
 
   const searchKey = searchParams.toString();
   useEffect(() => {
@@ -281,12 +300,36 @@ export function MonthlyReportNewPage() {
             publisher: typeof sb.publisher === "string" ? sb.publisher.trim() : "",
           }
         : null;
-    setSelectedBooks(mockBooksFromSavedBookKeywords(rep, fb));
+    const restored = mockBooksFromSavedBookKeywords(rep, fb);
+    setSelectedBooks(restored);
+    if (restored.some((b) => b.db_book_id?.trim())) {
+      void refreshMockBooksAiFromDb(restored)
+        .then((refreshed) => setSelectedBooks(refreshed))
+        .catch((e) => setMsg(e instanceof Error ? e.message : String(e)));
+    }
 
     setWizardStep(6);
     setAiTokenUsage(null);
     setMsg(null);
   }, [studentId, yearMonth, savedMonthlyReports, savedMonthlyLoading, searchParams]);
+
+  /** 3단 이후 — books 테이블에서 ai_category·ai_keywords 동기화(비어 있으면 Gemini 보완) */
+  useEffect(() => {
+    if (wizardStep < 3 || selectedBooks.length === 0) return;
+    const key = selectedBooks
+      .map((b) => `${b.db_book_id?.trim() ?? ""}|${bookSelectionKey(b)}`)
+      .join(";");
+    if (!selectedBooks.some((b) => b.db_book_id?.trim())) return;
+    if (booksAiRefreshKeyRef.current === key) return;
+    booksAiRefreshKeyRef.current = key;
+    let cancelled = false;
+    void refreshMockBooksAiFromDb(selectedBooks).then((refreshed) => {
+      if (!cancelled) setSelectedBooks(refreshed);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [wizardStep, selectedBooks]);
 
   function isBookSearchHitSelected(hit: BookSearchHit) {
     return selectedBooks.some((s) => bookSelectionKey(s) === hit.key);
@@ -492,14 +535,17 @@ export function MonthlyReportNewPage() {
     setAiBusy(true);
     try {
       const book = await bookContextForAi(primary);
-      const bundle = await generateMonthlyReportBundle({
-        growthMeta,
-        writingImageNote,
-        book,
-        scores,
-        pillarComments,
-        warmMessageDraft: warmDraft,
-      });
+      const bundle = await generateMonthlyReportBundle(
+        {
+          growthMeta,
+          writingImageNote,
+          book,
+          scores,
+          pillarComments,
+          warmMessageDraft: warmDraft,
+        },
+        reportPrivacy,
+      );
       setGrowth(bundle.growthMoment);
       setCompetencyAnalysis(bundle.competencyAnalysis);
       setTeacherNote(bundle.warmMessage);
@@ -538,6 +584,12 @@ export function MonthlyReportNewPage() {
 
     const sw = pickStrengthWeaknessPointsForReport(scores, pillarComments);
     const cw = competencyAnalysisToMReportComments(competencyAnalysis);
+    const safeGrowth = sanitizeReportStudentPii(stripAiPlainText(growth), reportPrivacy);
+    const safeCw = {
+      strength_cmt: sanitizeReportStudentPii(cw.strength_cmt ?? "", reportPrivacy),
+      weakness_cmt: sanitizeReportStudentPii(cw.weakness_cmt ?? "", reportPrivacy),
+    };
+    const safeTeacher = sanitizeReportStudentPii(teacherNote.trim(), reportPrivacy) || null;
     const imgSlots = writingImages.slice(0, MAX_WRITING_IMAGES).map((u) => u.trim()).filter(Boolean);
 
     try {
@@ -555,7 +607,7 @@ export function MonthlyReportNewPage() {
           score_discussion: scores.discussion,
           score_writing: scores.writing,
           score_growth: scores.growth,
-          growth_moment: stripAiPlainText(growth) || null,
+          growth_moment: safeGrowth || null,
           growth_meta: growthMetaPayload,
           writing_img_url1: imgSlots[0] ?? null,
           writing_img_url2: imgSlots[1] ?? null,
@@ -563,10 +615,10 @@ export function MonthlyReportNewPage() {
           book_id2: selectedBooks[1]?.db_book_id ?? null,
           strength_point: sw.strength_point,
           weakness_point: sw.weakness_point,
-          strength_cmt: cw.strength_cmt,
-          weakness_cmt: cw.weakness_cmt,
+          strength_cmt: safeCw.strength_cmt,
+          weakness_cmt: safeCw.weakness_cmt,
           book_keywords: bookKeywordsPayload,
-          teacher_comment: teacherNote.trim() || null,
+          teacher_comment: safeTeacher,
         };
 
         const { data: existingM, error: exErr } = await supabase
@@ -635,22 +687,22 @@ export function MonthlyReportNewPage() {
       await localSaveMonthlyReport({
         student_id: studentId,
         year_month: yearMonth,
-        growth_moment: stripAiPlainText(growth) || null,
+        growth_moment: safeGrowth || null,
         growth_meta: growthMetaPayload,
         score_reading: scores.reading,
         score_thinking: scores.thinking,
         score_discussion: scores.discussion,
         score_writing: scores.writing,
         score_growth: scores.growth,
-        teacher_comment: teacherNote.trim() || null,
+        teacher_comment: safeTeacher,
         writing_img_url1: imgSlots[0] ?? null,
         writing_img_url2: imgSlots[1] ?? null,
         book_id1: selectedBooks[0]?.db_book_id ?? null,
         book_id2: selectedBooks[1]?.db_book_id ?? null,
         strength_point: sw.strength_point,
         weakness_point: sw.weakness_point,
-        strength_cmt: cw.strength_cmt,
-        weakness_cmt: cw.weakness_cmt,
+        strength_cmt: safeCw.strength_cmt,
+        weakness_cmt: safeCw.weakness_cmt,
         book_keywords: bookKeywordsPayload,
       });
       setMsg("저장되었습니다. 학생 상세로 돌아가 확인해 주세요.");

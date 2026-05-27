@@ -1,4 +1,12 @@
 import type { Json } from "./types/database";
+import {
+  applyReportPrivacy,
+  REPORT_NO_PII_PROMPT_RULES,
+  type ReportPrivacyContext,
+} from "./reportStudentPrivacy";
+
+/** 분기 마인드맵 코멘트 — AI가 스스로 맞출 목표 분량(서버에서 자르지 않음) */
+export const QUARTER_MINDMAP_COMMENT_TARGET_CHARS = 560;
 
 /** 분기 마인드맵 생성용 — `books`에서 가져온 행 */
 export type QuarterMindmapBookRow = {
@@ -25,7 +33,7 @@ function getModel(): string {
   return m || "gemini-2.0-flash";
 }
 
-async function geminiGenerateText(
+async function geminiGeneratePlainText(
   prompt: string,
   temperature = 0.52,
   maxOutputTokens: number = 4096,
@@ -45,6 +53,7 @@ async function geminiGenerateText(
       generationConfig: {
         temperature,
         maxOutputTokens,
+        responseMimeType: "text/plain",
       },
     }),
   });
@@ -98,77 +107,113 @@ function formatKeywords(kw: Json): string {
   }
 }
 
+/** 입력 프롬프트용 — 도서 소개만 요약 (본문 코멘트와 별도) */
 function formatBookBlock(b: QuarterMindmapBookRow, index: number): string {
   const intro = (b.introduce ?? "").trim();
-  const introClip = intro.length > 3500 ? `${intro.slice(0, 3500)}…` : intro;
+  const introClip = intro.length > 2000 ? `${intro.slice(0, 2000)}…` : intro;
+  const authorClip = (b.author_cmt ?? "").trim();
+  const pubClip = (b.pub_cmt ?? "").trim();
   return [
     `### 도서 ${index + 1}: ${b.title}`,
-    `- 표지(cover_url): ${b.cover_url?.trim() || "(없음)"}`,
-    `- 저자: ${b.author} · 출판사: ${b.publisher}`,
-    `- URL: ${b.url?.trim() || "(없음)"}`,
-    `- category: ${b.category?.trim() || "(없음)"}`,
     `- ai_category: ${b.ai_category?.trim() || "(없음)"}`,
     `- ai_keywords: ${formatKeywords(b.ai_keywords) || "(없음)"}`,
-    `- introduce:\n${introClip || "(없음)"}`,
-    `- author_cmt:\n${(b.author_cmt ?? "").trim() || "(없음)"}`,
-    `- pub_cmt:\n${(b.pub_cmt ?? "").trim() || "(없음)"}`,
-  ].join("\n");
+    `- introduce 요약 근거:\n${introClip || "(없음)"}`,
+    authorClip ? `- author_cmt 발췌:\n${authorClip.length > 800 ? `${authorClip.slice(0, 800)}…` : authorClip}` : null,
+    pubClip ? `- pub_cmt 발췌:\n${pubClip.length > 800 ? `${pubClip.slice(0, 800)}…` : pubClip}` : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function buildPrompt(studentGradeLabel: string, quarterLabel: string, books: QuarterMindmapBookRow[]): string {
+  const target = QUARTER_MINDMAP_COMMENT_TARGET_CHARS;
   const blocks = books.map((b, i) => formatBookBlock(b, i)).join("\n\n");
   return `당신은 독서·교과 연계 수업을 설계하는 국어·교양 교육 전문가입니다.
 
+${REPORT_NO_PII_PROMPT_RULES}
+
 ## 맥락
-- 학생(또는 학급) 학년·급 정보: **${studentGradeLabel}** (이미「초1~초6·중1~중3·고1~고3」표기로 전달된 경우가 많습니다. 본문에서는 이 한글 표기만 사용하세요.)
-- 분기 구간 표시(마지막 달 YYYY-MM 등): **${quarterLabel}**
-- 아래 도서 목록은 **해당 분기에 포함된 연속 3개월 월간 레포트(m_reports)**에 연결된 \`book_id1\`, \`book_id2\`로부터 가져온 \`books\` 행입니다. 각 행의 **ai_keywords, introduce, category, author_cmt, pub_cmt, ai_category**를 참고해 요지만 잡으세요.
+- 학년·급: **${studentGradeLabel}** (본문은「초1~초6」「중1~중3」「고1~고3」한글 표기만)
+- 분기: **${quarterLabel}**
+- 아래는 이 분기 월간 레포트에 연결된 도서 메타입니다.
 
 ${blocks}
 
 ## 작성 지시 (반드시 준수)
-**한국어**로, 학부모·동료가 한 번 읽고 이해할 수 있는 **아주 짧은 요약**만 작성하세요. 분량은 **문단 2개**, **문단당 문장 1~2개**로 제한합니다. 전체 **350자 이내**를 넘기지 마세요.
-- 학년을 말할 때는 **반드시「초1~초6」「중1~중3」「고1~고3」**처럼 한글만 사용하세요. **e/m/h, E/M/H, 숫자 코드**(예: h3, H3, e1)는 본문에 쓰지 마세요.
-- 1문단: 제시된 **학년/급**의 발달·학습 맥락을 한두 문장으로만 짚습니다.
-- 2문단: 위 도서 구성(주제·역량·정서 등 **메타데이터에 기대**)이 왜 타당한지 한두 문장으로만 요약합니다. 책 제목은 나열하지 말고 필요할 때만 1권 정도만 언급하세요.
-- **JSON·목록·코드·마크다운·따옴표로 감싼 필드명**은 절대 쓰지 마세요. 순수 본문 텍스트만 출력하세요.
-- 줄바꿈은 문단 사이 **한 번**(실제 줄바꿈)만 두고, 그 외 장황한 나열은 하지 마세요.`;
+**순수 한국어 본문만** 출력하세요. JSON·마크다운·코드·필드명·따옴표 장식 제목 금지.
+
+### 분량 (가장 중요)
+- 목표: **한글 ${target}자 전후**(공백 포함, **${target - 40}~${target + 40}자**).
+- **이 분량 안에서 처음부터 끝까지 완결**된 글을 쓰세요. 길어질 것 같으면 **문장을 줄여** 범위에 맞추세요.
+- 시스템이 글을 잘라 주지 않으므로, **범위를 넘긴 채로 쓰면 중간에 끊긴 것처럼 보일 수 있습니다** — 반드시 스스로 분량을 조절하세요.
+- 너무 짧은 한두 문장만 쓰지 마세요.
+
+### 내용
+- **3문단**, 문단당 **2~3문장**, 문단 사이 빈 줄 1줄.
+- 1문단: 해당 학년 발달·학습 맥락.
+- 2문단: 이번 분기 도서 주제·역량·정서가 그 맥락과 맞는 이유(제목 나열 최소화).
+- 3문단: 이 구성으로 수업한 선택의 타당성 + 가정에서 이어갈 짧은 제안 1문장.
+
+인용 부호가 필요하면 『』를 쓰고, ASCII 큰따옴표(")는 본문에 쓰지 마세요.`;
 }
 
-/** 모델이 JSON이나 이스케이프된 \\n만 넘긴 경우 본문으로 정리 */
-export function normalizeQuarterMindmapModelText(raw: string): string {
-  let t = raw.trim();
-  if (t.startsWith("{") && t.endsWith("}")) {
-    try {
-      const j = JSON.parse(t) as Record<string, unknown>;
-      for (const k of ["ai_knowledge_network_comment", "comment", "text", "message"] as const) {
-        const v = j[k];
-        if (typeof v === "string" && v.trim()) {
-          t = v.trim();
-          break;
-        }
-      }
-    } catch {
-      /* 그대로 t 사용 */
-    }
-  }
-  t = t.replace(/\\r\\n/g, "\n").replace(/\\n/g, "\n").replace(/\\t/g, " ");
-  return t.trim();
+function cleanupPlainCommentText(t: string): string {
+  return t
+    .replace(/\\r\\n/g, "\n")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, " ")
+    .trim();
 }
 
 /**
- * 분기 「지식 마인드맵」 단계용 — 월간에 연결된 도서 메타를 바탕으로 Gemini가 수업 선택 타당성 코멘트를 생성합니다.
- * `.env`의 `VITE_GEMINI_API_KEY`, `VITE_GEMINI_MODEL`을 사용합니다.
+ * 모델이 JSON으로 감쌌을 때만 복원. 본문 안의 " 때문에 잘리는 정규식 파싱은 사용하지 않습니다.
+ */
+export function normalizeQuarterMindmapModelText(raw: string): string {
+  let t = raw.trim();
+  if (t.startsWith("```")) {
+    t = t.replace(/^```(?:json|text)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+  }
+
+  if (t.startsWith("{")) {
+    try {
+      const j = JSON.parse(t) as Record<string, unknown>;
+      for (const k of ["ai_knowledge_network_comment", "comment", "text", "message", "content"] as const) {
+        const v = j[k];
+        if (typeof v === "string" && v.trim()) return cleanupPlainCommentText(v);
+      }
+    } catch {
+      const unwrapped = t
+        .replace(/^\{\s*"(?:ai_knowledge_network_comment|comment|text|message)"\s*:\s*"/, "")
+        .replace(/"\s*,\s*"[^"]+"\s*:[\s\S]*$/, "")
+        .replace(/"\s*\}\s*$/, "");
+      if (unwrapped.length > 40 && unwrapped !== t) {
+        return cleanupPlainCommentText(unwrapped.replace(/\\"/g, '"'));
+      }
+    }
+  }
+
+  return cleanupPlainCommentText(t);
+}
+
+/**
+ * 분기 「지식 마인드맵」 — 수업 선택 타당성 코멘트(평문). 본문은 서버에서 자르지 않습니다.
  */
 export async function generateQuarterKnowledgeMindmapComment(input: {
   studentGradeLabel: string;
   quarterLabel: string;
   books: QuarterMindmapBookRow[];
+  privacy?: ReportPrivacyContext;
 }): Promise<string> {
   if (!input.books.length) {
     throw new Error("생성할 도서 정보가 없습니다.");
   }
   const prompt = buildPrompt(input.studentGradeLabel, input.quarterLabel, input.books);
-  const raw = await geminiGenerateText(prompt, 0.45, 420);
-  return normalizeQuarterMindmapModelText(raw);
+  const raw = await geminiGeneratePlainText(prompt, 0.45, 4096);
+  const normalized = normalizeQuarterMindmapModelText(raw);
+  if (normalized.length < 80) {
+    throw new Error(
+      "AI 코멘트가 너무 짧게 생성되었습니다. 잠시 후 다시 「지식 마인드맵 생성」을 눌러 주세요.",
+    );
+  }
+  return applyReportPrivacy(normalized, input.privacy);
 }

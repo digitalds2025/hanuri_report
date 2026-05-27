@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
-import { ChevronDown, ChevronUp, Database, Eye, Layers, Loader2, Sparkles } from "lucide-react";
-import type { BriefingSlidePlan, ScreenChunk, StoryPhase } from "../../lib/briefingMaterialTypes";
+import { ChevronDown, ChevronUp, Database, Eye, Layers, Loader2, Sparkles, Target } from "lucide-react";
+import type { BriefingSlidePlan, SlideContextSet, StoryPhase } from "../../lib/briefingMaterialTypes";
 import { SLIDE_LAYOUT_OPTIONS } from "../../lib/briefingMaterialTypes";
 import { planToPreviewSlide } from "../../lib/briefingSlidePlanning";
+import { syncPlanDerivedFields } from "../../lib/briefingSlidePlanNormalize";
 import { getSlideContentPlan } from "../../lib/briefingStorylinePlanning";
 import { layoutForContent } from "../../lib/briefingStorylinePlanning";
 import type { LocalEduTokenLedger } from "../../lib/localEdu/tokenUsage";
@@ -45,18 +46,17 @@ export function SlidePlanReviewPage({
 }: SlidePlanReviewPageProps) {
   const [expanded, setExpanded] = useState<number>(0);
 
-  function updatePlan(index: number, patch: Partial<BriefingSlidePlan>) {
+  function commitPlan(index: number, patch: Partial<BriefingSlidePlan>) {
+    const merged = { ...plans[index], ...patch };
     const next = [...plans];
-    next[index] = { ...next[index], ...patch };
+    next[index] = syncPlanDerivedFields(merged as BriefingSlidePlan);
     onPlansChange(next);
   }
 
-  function updateChunk(planIndex: number, chunkIndex: number, patch: Partial<ScreenChunk>) {
-    const p = plans[planIndex];
-    const chunks = [...(p.screenChunks ?? [])];
-    chunks[chunkIndex] = { ...chunks[chunkIndex], ...patch };
-    const keyMessages = chunks.map((c) => (c.sublabel ? `${c.label} · ${c.sublabel}` : c.label));
-    updatePlan(planIndex, { screenChunks: chunks, keyMessages, keyPoints: keyMessages });
+  function updateContextSet(planIndex: number, setIndex: number, patch: Partial<SlideContextSet>) {
+    const sets = [...plans[planIndex].contextSets];
+    sets[setIndex] = { ...sets[setIndex], ...patch };
+    commitPlan(planIndex, { contextSets: sets });
   }
 
   function setLayout(index: number, layout: string) {
@@ -79,7 +79,7 @@ export function SlidePlanReviewPage({
       p.dataRefs,
       p.storyPhase ?? "development",
     );
-    updatePlan(index, {
+    commitPlan(index, {
       recommendedLayout: layout,
       visualHint: hintMap[layout] ?? auto,
     });
@@ -101,8 +101,8 @@ export function SlidePlanReviewPage({
           <h1 className="mt-1 text-2xl font-black text-slate-900">{topicTitle}</h1>
           <p className="mt-2 text-sm text-slate-600">
             요청 <strong>{targetSlideCount}장</strong> · 현재 기획 <strong>{plans.length}장</strong>.
-            왼쪽에서 슬라이드 기획을 수정하고, 오른쪽 <strong>레이아웃 미리보기</strong>에서 제작될 화면을
-            확인하세요. 화면은 키워드·수치만, 자세한 설명은 <strong>발표 멘트</strong>에 둡니다.
+            슬라이드마다 <strong>Hero Fact</strong> · <strong>Context 3세트(현상→분석)</strong> ·{" "}
+            <strong>Action Strategy</strong>를 확인·수정한 뒤 제작하세요.
           </p>
         </div>
         <button
@@ -128,6 +128,7 @@ export function SlidePlanReviewPage({
         {plans.map((plan, i) => {
           const open = expanded === i;
           const phase = plan.storyPhase ?? "development";
+          const hero = plan.heroFact;
           return (
             <article
               key={`${plan.slideNumber}-${plan.blockId ?? i}`}
@@ -145,8 +146,8 @@ export function SlidePlanReviewPage({
                   <p className="font-bold text-slate-900 truncate">{plan.title}</p>
                   <p className="text-xs text-slate-500 truncate">
                     {PHASE_LABELS[phase]} · {plan.recommendedLayout}
-                    {plan.heroMetric ? ` · ${plan.heroMetric.value}` : ""}
-                    {plan.dataRefs.length ? ` · 데이터 ${plan.dataRefs.length}건` : ""}
+                    {hero?.metricValue ? ` · ${hero.metricValue}` : plan.heroMetric?.value ? ` · ${plan.heroMetric.value}` : ""}
+                    {plan.contextSets?.length ? ` · Context ${plan.contextSets.length}세트` : ""}
                   </p>
                 </div>
                 {open ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
@@ -156,7 +157,7 @@ export function SlidePlanReviewPage({
                 <div className="grid gap-0 border-t lg:grid-cols-[minmax(0,1fr)_minmax(380px,520px)]">
                   <div className="space-y-4 px-5 py-4 text-sm lg:border-r">
                     <p className="text-xs font-bold uppercase tracking-wide text-slate-400">
-                      슬라이드 기획
+                      슬라이드 기획 (3단 구조)
                     </p>
                     <span className="inline-block rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
                       {PHASE_LABELS[phase]}
@@ -167,7 +168,7 @@ export function SlidePlanReviewPage({
                       <input
                         className="mt-1 w-full rounded-lg border px-3 py-2"
                         value={plan.title}
-                        onChange={(e) => updatePlan(i, { title: e.target.value })}
+                        onChange={(e) => commitPlan(i, { title: e.target.value })}
                       />
                     </label>
                     <label className="block">
@@ -176,7 +177,7 @@ export function SlidePlanReviewPage({
                         className="mt-1 w-full rounded-lg border px-3 py-2"
                         rows={2}
                         value={plan.purpose}
-                        onChange={(e) => updatePlan(i, { purpose: e.target.value })}
+                        onChange={(e) => commitPlan(i, { purpose: e.target.value })}
                       />
                     </label>
                     <div className="grid gap-3 sm:grid-cols-2">
@@ -199,22 +200,50 @@ export function SlidePlanReviewPage({
                         <input
                           className="mt-1 w-full rounded-lg border px-3 py-2"
                           value={plan.visualHint}
-                          onChange={(e) => updatePlan(i, { visualHint: e.target.value })}
+                          onChange={(e) => commitPlan(i, { visualHint: e.target.value })}
                         />
                       </label>
                     </div>
 
-                    {plan.heroMetric ? (
-                      <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3">
-                        <p className="text-xs font-bold text-indigo-800">화면 빅넘버 (수집 데이터)</p>
-                        <p className="mt-1 text-2xl font-black text-indigo-700">{plan.heroMetric.value}</p>
-                        <p className="text-sm text-slate-700">{plan.heroMetric.label}</p>
+                    <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
+                      <p className="text-xs font-bold text-indigo-800">① Hero Fact & Metric</p>
+                      <input
+                        className="w-full rounded-lg border px-3 py-2 text-sm font-bold"
+                        value={hero?.headline ?? ""}
+                        placeholder="고유명사 + 수치 한 줄 (예: 백운중 학생수 687명)"
+                        onChange={(e) =>
+                          commitPlan(i, {
+                            heroFact: { ...hero, headline: e.target.value, properNouns: hero?.properNouns ?? [] },
+                          })
+                        }
+                      />
+                      <div className="grid gap-2 sm:grid-cols-2">
+                        <input
+                          className="rounded-lg border px-3 py-2"
+                          value={hero?.metricValue ?? ""}
+                          placeholder="수치"
+                          onChange={(e) =>
+                            commitPlan(i, {
+                              heroFact: { ...hero, headline: hero?.headline ?? "", properNouns: hero?.properNouns ?? [], metricValue: e.target.value },
+                            })
+                          }
+                        />
+                        <input
+                          className="rounded-lg border px-3 py-2"
+                          value={hero?.metricLabel ?? ""}
+                          placeholder="수치 라벨"
+                          onChange={(e) =>
+                            commitPlan(i, {
+                              heroFact: { ...hero, headline: hero?.headline ?? "", properNouns: hero?.properNouns ?? [], metricLabel: e.target.value },
+                            })
+                          }
+                        />
                       </div>
-                    ) : null}
+                    </div>
 
                     <div>
                       <span className="flex items-center gap-1 font-bold text-slate-700">
-                        <Database size={14} /> 수집 데이터 (발표 멘트·표/차트 근거)
+                        <Database size={14} /> 수집 데이터 (fact 그라운딩)
                       </span>
                       <ul className="mt-2 max-h-36 space-y-2 overflow-y-auto rounded-lg bg-slate-50 p-3 text-xs">
                         {plan.dataRefs.length === 0 ? (
@@ -232,44 +261,77 @@ export function SlidePlanReviewPage({
                       </ul>
                     </div>
 
-                    <label className="block">
-                      <span className="font-bold text-slate-700">슬라이드 내용 기획</span>
-                      <p className="mt-0.5 text-[11px] text-slate-500">
-                        이 슬라이드에 담을 내용·메시지·수집 데이터 활용 방식 (읽기 쉬운 기획 문장)
-                      </p>
-                      <textarea
-                        className="mt-1 w-full rounded-lg border px-3 py-2 leading-relaxed"
-                        rows={5}
-                        value={getSlideContentPlan(plan)}
-                        onChange={(e) =>
-                          updatePlan(i, { slideContentPlan: e.target.value, contentPlan: e.target.value })
-                        }
-                      />
-                    </label>
-
                     <div>
-                      <span className="font-bold text-slate-700">
-                        화면 키워드 청크 (3-3 규칙 · 최대 3개, 명사형)
-                      </span>
-                      <div className="mt-2 space-y-2">
-                        {(plan.screenChunks ?? []).map((ch, ci) => (
-                          <div key={ci} className="grid gap-2 sm:grid-cols-2">
-                            <input
-                              className="rounded-lg border px-3 py-2 text-sm font-bold"
-                              value={ch.label}
-                              placeholder="키워드 / 수치"
-                              onChange={(e) => updateChunk(i, ci, { label: e.target.value })}
+                      <span className="font-bold text-slate-700">② Context Body (현상 → 분석 → 화면키워드)</span>
+                      <p className="mt-0.5 text-[11px] text-slate-500">최소 3세트 · TABLE/METRIC/CHART에 매핑</p>
+                      <div className="mt-2 space-y-3">
+                        {(plan.contextSets ?? []).map((set, si) => (
+                          <div key={si} className="rounded-lg border bg-slate-50 p-3 space-y-2">
+                            <p className="text-xs font-bold text-slate-500">세트 {si + 1}</p>
+                            <textarea
+                              className="w-full rounded-lg border px-2 py-1.5 text-xs"
+                              rows={2}
+                              value={set.phenomenon}
+                              placeholder="현상 (fact·학교명·수치)"
+                              onChange={(e) => updateContextSet(i, si, { phenomenon: e.target.value })}
                             />
-                            <input
-                              className="rounded-lg border px-3 py-2 text-sm"
-                              value={ch.sublabel ?? ""}
-                              placeholder="보조 설명 (한 줄)"
-                              onChange={(e) => updateChunk(i, ci, { sublabel: e.target.value })}
+                            <textarea
+                              className="w-full rounded-lg border px-2 py-1.5 text-xs"
+                              rows={2}
+                              value={set.analysis}
+                              placeholder="분석 (학부모 관점)"
+                              onChange={(e) => updateContextSet(i, si, { analysis: e.target.value })}
                             />
+                            <div className="grid gap-2 sm:grid-cols-2">
+                              <input
+                                className="rounded-lg border px-2 py-1.5 text-xs font-bold"
+                                value={set.screenKeyword}
+                                placeholder="화면 키워드/수치"
+                                onChange={(e) => updateContextSet(i, si, { screenKeyword: e.target.value })}
+                              />
+                              <input
+                                className="rounded-lg border px-2 py-1.5 text-xs"
+                                value={set.screenDetail ?? ""}
+                                placeholder="TABLE 보조 셀"
+                                onChange={(e) => updateContextSet(i, si, { screenDetail: e.target.value })}
+                              />
+                            </div>
                           </div>
                         ))}
                       </div>
                     </div>
+
+                    <label className="block">
+                      <span className="flex items-center gap-1 font-bold text-slate-700">
+                        <Target size={14} /> ③ Action Strategy
+                      </span>
+                      <textarea
+                        className="mt-1 w-full rounded-lg border px-3 py-2"
+                        rows={3}
+                        value={plan.actionStrategy}
+                        onChange={(e) => commitPlan(i, { actionStrategy: e.target.value })}
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="font-bold text-slate-700">컨설턴트 인사이트</span>
+                      <textarea
+                        className="mt-1 w-full rounded-lg border px-3 py-2"
+                        rows={2}
+                        value={plan.consultantInsight ?? ""}
+                        onChange={(e) => commitPlan(i, { consultantInsight: e.target.value })}
+                      />
+                    </label>
+
+                    <label className="block">
+                      <span className="font-bold text-slate-700">통합 기획서 (자동 생성)</span>
+                      <textarea
+                        className="mt-1 w-full rounded-lg border px-3 py-2 leading-relaxed bg-slate-50"
+                        rows={6}
+                        readOnly
+                        value={getSlideContentPlan(plan)}
+                      />
+                    </label>
 
                     <label className="block">
                       <span className="font-bold text-slate-700">
@@ -279,7 +341,7 @@ export function SlidePlanReviewPage({
                         className="mt-1 w-full rounded-lg border px-3 py-2"
                         rows={5}
                         value={plan.speakerNotes}
-                        onChange={(e) => updatePlan(i, { speakerNotes: e.target.value })}
+                        onChange={(e) => commitPlan(i, { speakerNotes: e.target.value })}
                       />
                     </label>
                   </div>
@@ -290,7 +352,7 @@ export function SlidePlanReviewPage({
                       레이아웃 미리보기
                     </p>
                     <p className="mb-3 text-[11px] text-slate-500">
-                      {plan.recommendedLayout} · 실제 제작 시 아래와 같은 형태로 출력됩니다
+                      {plan.recommendedLayout} · contextSets 기반 화면 매핑
                     </p>
                     <SlideScaledPreview slide={previewSlide} />
                     <p className="mt-2 text-center text-[10px] text-slate-400">

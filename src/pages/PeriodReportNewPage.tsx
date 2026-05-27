@@ -3,6 +3,8 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 import {
   dateRangeForPeriodEndingInMonth,
+  endYmForHalfYearCode,
+  halfYearCodeForEndYm,
   enrollmentYearMonth,
   findQuarterReportForYearMonth,
   quarterYearKeyForEndYm,
@@ -18,13 +20,22 @@ import {
 } from "../lib/geminiQuarterMindmap";
 import { generateQuarterGrowthInsight } from "../lib/geminiQuarterGrowthInsight";
 import { generateQuarterReportFinalize } from "../lib/geminiQuarterReportFinalize";
+import {
+  applyReportPrivacy,
+  buildReportPrivacyContext,
+  sanitizeReportStudentPii,
+} from "../lib/reportStudentPrivacy";
 import { upsertQuarterReportDraft } from "../lib/quarterReportDraftSync";
 import type { Json, MonthlyReport } from "../lib/types/database";
 import { useMonthlyReports } from "../hooks/useMonthlyReports";
 import { useStudentPeriodReports } from "../hooks/useStudentPeriodReports";
 import { useStudents } from "../hooks/useStudents";
 import type { HalfReportRow, YearReportRow } from "../lib/studentPeriodReportsTypes";
+import { HalfYearReportComposer } from "../components/half/HalfYearReportComposer";
+import { HalfYearReportSections, type HalfYearReportViewModel } from "../components/half/HalfYearReportSections";
 import { ReportSection } from "../components/monthly/MonthlyReportResultView";
+import { pillarLabelsKo, PILLAR_KEYS, type PillarKey } from "../lib/reportAggregates";
+import { HALF_YEAR_READING_TYPES } from "../lib/halfYearReadingTypes";
 
 /** 분기(3m) 작성 마법사 — 월간 작성 페이지와 동일한 단계 UX */
 const QUARTER_WIZARD_STEPS = [
@@ -332,7 +343,58 @@ function PeriodSavedViewShell(props: {
   );
 }
 
+function halfReportToViewModel(row: HalfReportRow): HalfYearReportViewModel {
+  const type =
+    HALF_YEAR_READING_TYPES.find((t) => t.code === row.type_logic_code) ??
+    (row.reading_type_name
+      ? HALF_YEAR_READING_TYPES.find((t) => t.typeName === row.reading_type_name)
+      : undefined) ??
+    null;
+  const readingType =
+    type ??
+    (row.reading_type_name && row.type_description
+      ? {
+          code: (row.type_logic_code ?? "RT") as "RT",
+          pillars: ["reading", "thinking"] as const,
+          comboLabel: row.reading_type_name,
+          typeName: row.reading_type_name,
+          description: row.type_description,
+        }
+      : null);
+
+  const radarAverages = Object.fromEntries(
+    PILLAR_KEYS.map((k) => [k, row[`score_${k}` as keyof HalfReportRow] as number]),
+  ) as Record<PillarKey, number>;
+
+  const pillarDescs = Object.fromEntries(
+    PILLAR_KEYS.map((k) => [
+      k,
+      (row[`score_${k}_desc` as keyof HalfReportRow] as string | null) ?? "",
+    ]),
+  ) as Record<PillarKey, string>;
+
+  const m = /^(\d{4})-H([12])$/.exec(row.half_year_code);
+  const halfLabel = m ? `${m[1]}년 ${m[2] === "1" ? "상반기" : "하반기"}` : row.half_year_code;
+
+  const highKey = (row.gauge_high_pillar ?? "reading") as PillarKey;
+  const lowKey = (row.gauge_low_pillar ?? "growth") as PillarKey;
+
+  return {
+    halfLabel,
+    scoreOverview: row.score_overview ?? "",
+    pillarDescs,
+    gaugeHighLabel: pillarLabelsKo[highKey] ?? highKey,
+    gaugeLowLabel: pillarLabelsKo[lowKey] ?? lowKey,
+    gaugeHighDesc: row.gauge_high_desc ?? "",
+    gaugeLowDesc: row.gauge_low_desc ?? "",
+    readingType,
+    teacherComment: row.teacher_comment ?? "",
+    radarAverages,
+  };
+}
+
 function HalfSavedBody({ row }: { row: HalfReportRow }) {
+  const vm = halfReportToViewModel(row);
   return (
     <>
       <div>
@@ -340,28 +402,7 @@ function HalfSavedBody({ row }: { row: HalfReportRow }) {
         <p className="mt-1 text-base font-semibold text-slate-900">{row.half_year_code}</p>
         <p className="mt-1 text-sm text-slate-600">발행 {formatPublishedYmd(row.created_at)}</p>
       </div>
-      <div>
-        <p className="text-xs font-medium text-slate-500">5대 역량</p>
-        <p className="mt-1 text-sm text-slate-800">{formatScoresLine(row)}</p>
-      </div>
-      {row.reading_type_name?.trim() ? (
-        <div>
-          <p className="text-xs font-medium text-slate-500">읽기 유형</p>
-          <p className="mt-1 text-sm font-medium text-slate-900">{row.reading_type_name.trim()}</p>
-        </div>
-      ) : null}
-      {row.type_description?.trim() ? (
-        <div>
-          <p className="text-xs font-medium text-slate-500">유형 설명</p>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{row.type_description.trim()}</p>
-        </div>
-      ) : null}
-      {row.teacher_comment?.trim() ? (
-        <div>
-          <p className="text-xs font-medium text-slate-500">선생님 한마디</p>
-          <p className="mt-1 whitespace-pre-wrap text-sm text-slate-800">{row.teacher_comment.trim()}</p>
-        </div>
-      ) : null}
+      <HalfYearReportSections model={vm} />
     </>
   );
 }
@@ -463,6 +504,25 @@ export function PeriodReportNewPage() {
     return st ? enrollmentYearMonth(st.created_at) : "";
   }, [students, studentId]);
 
+  const currentStudent = useMemo(
+    () => (studentId ? students.find((s) => s.student_id === studentId) : undefined),
+    [students, studentId],
+  );
+
+  const reportPrivacy = useMemo(
+    () =>
+      buildReportPrivacyContext({
+        studentNick: currentStudent?.student_nick,
+        studentId,
+      }),
+    [currentStudent?.student_nick, studentId],
+  );
+
+  const periodGradeLabel = useMemo(() => {
+    const raw = (currentStudent?.student_grade ?? "").trim();
+    return raw ? formatSchoolGradeLabel(raw) : "학년·급 정보 없음";
+  }, [currentStudent?.student_grade]);
+
   const focusRoundForQuarter = useMemo(() => {
     if (!anchorYm || !draftEndYm) return 0;
     return roundForYearMonth(anchorYm, draftEndYm);
@@ -515,22 +575,35 @@ export function PeriodReportNewPage() {
     const existing = summaryObj.ai_knowledge_network_comment;
     const hasKnowledge = typeof existing === "string" && existing.trim().length > 0;
     if (mc && !hasKnowledge) {
-      summaryObj.ai_knowledge_network_comment = mc;
+      summaryObj.ai_knowledge_network_comment = applyReportPrivacy(mc, reportPrivacy);
+    }
+    if (typeof summaryObj.ai_knowledge_network_comment === "string") {
+      summaryObj.ai_knowledge_network_comment = applyReportPrivacy(
+        summaryObj.ai_knowledge_network_comment,
+        reportPrivacy,
+      );
     }
     setSummaryText(JSON.stringify(summaryObj, null, 2));
 
     const gk = row.growth_keywords ?? row.insight_tags;
-    setInsightsText(Array.isArray(gk) ? JSON.stringify(gk) : "[]");
+    if (Array.isArray(gk)) {
+      const safeKw = gk.map((t) =>
+        typeof t === "string" ? sanitizeReportStudentPii(t, reportPrivacy) : t,
+      );
+      setInsightsText(JSON.stringify(safeKw));
+    } else {
+      setInsightsText("[]");
+    }
 
-    setRoadmapText((row.growth_cmt ?? row.insight_desc ?? "").trim());
-    setTeacherCommentSeed((row.teacher_comment ?? "").trim());
-    setTeacherComment((row.teacher_ai_comment ?? "").trim());
-    setBestWritingComment((row.best_writing_cmt ?? "").trim());
+    setRoadmapText(applyReportPrivacy((row.growth_cmt ?? row.insight_desc ?? "").trim(), reportPrivacy));
+    setTeacherCommentSeed(applyReportPrivacy((row.teacher_comment ?? "").trim(), reportPrivacy));
+    setTeacherComment(applyReportPrivacy((row.teacher_ai_comment ?? "").trim(), reportPrivacy));
+    setBestWritingComment(applyReportPrivacy((row.best_writing_cmt ?? "").trim(), reportPrivacy));
     setBestWritingUrl((row.best_writing_url ?? "").trim());
     setQuarterWizardStep(5);
     setQuarterEditSection(null);
     setMsg(null);
-  }, [qId, savedQuarter, studentId]);
+  }, [qId, savedQuarter, studentId, reportPrivacy]);
 
   const mindmapJsonOk = useMemo(() => {
     try {
@@ -583,24 +656,24 @@ export function PeriodReportNewPage() {
   }, []);
 
   const saveQuarterResultBestWriting = useCallback(() => {
-    setBestWritingComment(draftQuarterBestWriting);
+    setBestWritingComment(applyReportPrivacy(draftQuarterBestWriting, reportPrivacy));
     setQuarterEditSection(null);
-  }, [draftQuarterBestWriting]);
+  }, [draftQuarterBestWriting, reportPrivacy]);
 
   const saveQuarterResultMindmap = useCallback(() => {
-    mergeMindmapKnowledgeComment(draftQuarterMindmap);
+    mergeMindmapKnowledgeComment(applyReportPrivacy(draftQuarterMindmap, reportPrivacy));
     setQuarterEditSection(null);
-  }, [draftQuarterMindmap, mergeMindmapKnowledgeComment]);
+  }, [draftQuarterMindmap, mergeMindmapKnowledgeComment, reportPrivacy]);
 
   const saveQuarterResultGrowth = useCallback(() => {
-    setRoadmapText(draftQuarterGrowthCmt);
+    setRoadmapText(applyReportPrivacy(draftQuarterGrowthCmt, reportPrivacy));
     setQuarterEditSection(null);
-  }, [draftQuarterGrowthCmt]);
+  }, [draftQuarterGrowthCmt, reportPrivacy]);
 
   const saveQuarterResultTeacher = useCallback(() => {
-    setTeacherComment(draftQuarterTeacher);
+    setTeacherComment(applyReportPrivacy(draftQuarterTeacher, reportPrivacy));
     setQuarterEditSection(null);
-  }, [draftQuarterTeacher]);
+  }, [draftQuarterTeacher, reportPrivacy]);
 
   const insightsJsonOk = useMemo(() => {
     try {
@@ -735,11 +808,6 @@ export function PeriodReportNewPage() {
     })) as unknown as Json;
   }, [orderedQuarterMindmapBooks]);
 
-  const currentStudent = useMemo(
-    () => (studentId ? students.find((s) => s.student_id === studentId) : undefined),
-    [students, studentId],
-  );
-
   useEffect(() => {
     if (hId || yId) return;
     if (draftUrlType !== "3m") return;
@@ -793,11 +861,7 @@ export function PeriodReportNewPage() {
       setGrowthInsightGenErr("표에서 참조할 칸을 한 개 이상 선택해 주세요.");
       return;
     }
-    const rawGrade = (currentStudent?.student_grade ?? "").trim();
-    const gradeLabel =
-      (rawGrade ? formatSchoolGradeLabel(rawGrade) : "") ||
-      (currentStudent?.student_nick ?? "").trim() ||
-      "학년·급 정보 없음";
+    const gradeLabel = periodGradeLabel;
     const quarterLabel = draftEndYm ?? (quarterYearLabel || "분기");
     const colByYm = new Map(quarterGrowthColumns.map((c) => [c.ym, c]));
 
@@ -824,6 +888,7 @@ export function PeriodReportNewPage() {
         studentGradeLabel: gradeLabel,
         quarterLabel,
         sources,
+        privacy: reportPrivacy,
       });
       setInsightsText(JSON.stringify(keywords));
       setRoadmapText(comment);
@@ -832,7 +897,7 @@ export function PeriodReportNewPage() {
     } finally {
       setGrowthInsightGenBusy(false);
     }
-  }, [growthInsightSelection, quarterGrowthColumns, currentStudent, draftEndYm, quarterYearLabel]);
+  }, [growthInsightSelection, quarterGrowthColumns, periodGradeLabel, draftEndYm, quarterYearLabel, reportPrivacy]);
 
   const buildMindmapForSave = useCallback((): Json => {
     let base: Record<string, unknown> = {};
@@ -870,22 +935,19 @@ export function PeriodReportNewPage() {
       setQuarterFinalizeErr("3단계에서 성장 인사이트(키워드 3개·코멘트)를 완료해 주세요.");
       return;
     }
-    const rawGrade = (currentStudent?.student_grade ?? "").trim();
-    const gradeLabel =
-      (rawGrade ? formatSchoolGradeLabel(rawGrade) : "") ||
-      (currentStudent?.student_nick ?? "").trim() ||
-      "학년·급 정보 없음";
+    const gradeLabel = periodGradeLabel;
     const qL = draftEndYm ?? quarterYearLabel ?? "분기";
     const [k1, k2, k3] = parseInsightTagsTriple(insightsText);
     setQuarterFinalizeBusy(true);
     try {
       const res = await generateQuarterReportFinalize({
-        studentLabel: gradeLabel,
+        gradeLabel,
         quarterLabel: qL,
         knowledgeMindmapComment: knowledgeCommentForUi,
         insightKeywords: [k1, k2, k3],
         insightPositiveComment: roadmapText,
         teacherSeedMessage: seed,
+        privacy: reportPrivacy,
       });
       setBestWritingComment(res.bestWritingComment);
       setTeacherComment(res.teacherExpanded);
@@ -895,10 +957,10 @@ export function PeriodReportNewPage() {
         void upsertQuarterReportDraft(client, {
           student_id: studentId,
           quarter_end_ym: draftEndYm,
-          teacher_comment: seed.trim() || null,
+          teacher_comment: sanitizeReportStudentPii(seed, reportPrivacy) || null,
           best_writing_cmt: res.bestWritingComment.trim(),
           teacher_ai_comment: res.teacherExpanded.trim(),
-          mindmap_cmt: knowledgeCommentForUi.trim() || null,
+          mindmap_cmt: sanitizeReportStudentPii(knowledgeCommentForUi.trim(), reportPrivacy) || null,
         }).catch((err) => console.warn("[분기 AI 결과 저장]", err));
       }
     } catch (e) {
@@ -912,11 +974,12 @@ export function PeriodReportNewPage() {
     growthInsightStepOk,
     insightsText,
     roadmapText,
-    currentStudent,
+    periodGradeLabel,
     draftEndYm,
     quarterYearLabel,
     studentId,
     supabase,
+    reportPrivacy,
   ]);
 
   const runMindmapGeneration = useCallback(async () => {
@@ -929,11 +992,7 @@ export function PeriodReportNewPage() {
       setMindmapGenErr("이 분기 월간에 연결된 도서가 없습니다. 월간 리포트에서 도서를 먼저 저장해 주세요.");
       return;
     }
-    const rawGrade = (currentStudent?.student_grade ?? "").trim();
-    const grade =
-      (rawGrade ? formatSchoolGradeLabel(rawGrade) : "") ||
-      (currentStudent?.student_nick ?? "").trim() ||
-      "학년·급 정보 없음";
+    const grade = periodGradeLabel;
     const quarterLabel = draftEndYm ?? (quarterYearLabel || "분기");
     setMindmapGenBusy(true);
     try {
@@ -952,6 +1011,7 @@ export function PeriodReportNewPage() {
         studentGradeLabel: grade,
         quarterLabel,
         books: rows as QuarterMindmapBookRow[],
+        privacy: reportPrivacy,
       });
       setSummaryText((prev) => {
         let base: Record<string, unknown> = {};
@@ -977,7 +1037,7 @@ export function PeriodReportNewPage() {
     } finally {
       setMindmapGenBusy(false);
     }
-  }, [quarterMindmapBookIds, currentStudent, draftEndYm, quarterYearLabel]);
+  }, [quarterMindmapBookIds, periodGradeLabel, draftEndYm, quarterYearLabel, reportPrivacy]);
 
   function goQuarterNext() {
     setMsg(null);
@@ -1031,21 +1091,35 @@ export function PeriodReportNewPage() {
         if (Array.isArray(ins)) tags = ins as Json;
         else if (ins && typeof ins === "object") tags = [ins] as unknown as Json;
 
+        const safeMindmapCmt =
+          sanitizeReportStudentPii(knowledgeCommentForUi.trim(), reportPrivacy) || null;
+        const safeGrowthCmt = sanitizeReportStudentPii(roadmapText.trim(), reportPrivacy) || null;
+        const safeTeacherSeed =
+          sanitizeReportStudentPii(teacherCommentSeed.trim(), reportPrivacy) || null;
+        const safeBestWriting =
+          sanitizeReportStudentPii(bestWritingComment.trim(), reportPrivacy) || null;
+        const safeTeacherAi = sanitizeReportStudentPii(teacherComment.trim(), reportPrivacy) || null;
+        const safeTags = Array.isArray(tags)
+          ? (tags as unknown[]).map((t) =>
+              typeof t === "string" ? sanitizeReportStudentPii(t, reportPrivacy) : t,
+            )
+          : tags;
+
         try {
           await upsertQuarterReportDraft(client, {
             student_id: studentId,
             quarter_end_ym: qEnd,
             best_writing_url: bestWritingUrl.trim() || null,
             mindmap_book: mindmapBookSnapshot,
-            mindmap_cmt: knowledgeCommentForUi.trim() || null,
+            mindmap_cmt: safeMindmapCmt,
             mindmap_data: mind,
-            growth_keywords: tags,
-            growth_cmt: roadmapText.trim() || null,
-            insight_tags: tags,
-            insight_desc: roadmapText.trim() || null,
-            teacher_comment: teacherCommentSeed.trim() || null,
-            best_writing_cmt: bestWritingComment.trim() || null,
-            teacher_ai_comment: teacherComment.trim() || null,
+            growth_keywords: safeTags as Json,
+            growth_cmt: safeGrowthCmt,
+            insight_tags: safeTags as Json,
+            insight_desc: safeGrowthCmt,
+            teacher_comment: safeTeacherSeed,
+            best_writing_cmt: safeBestWriting,
+            teacher_ai_comment: safeTeacherAi,
           });
         } catch (upErr) {
           setMsg(upErr instanceof Error ? upErr.message : String(upErr));
@@ -1105,7 +1179,29 @@ export function PeriodReportNewPage() {
         </div>
       );
     }
-    const draftHrefHalf = `/students/${studentId}`;
+    const halfEndYm =
+      endYmForHalfYearCode(savedHalf.half_year_code) ??
+      searchParams.get("end_ym")?.trim() ??
+      "";
+    const draftHrefHalf = halfEndYm
+      ? `/students/${studentId}/period/new?type=6m&end_ym=${encodeURIComponent(halfEndYm)}&h_id=${encodeURIComponent(savedHalf.h_report_id)}`
+      : `/students/${studentId}`;
+
+    if (draftUrlType === "6m" && halfEndYm && studentId) {
+      return (
+        <HalfYearReportComposer
+          studentId={studentId}
+          endYm={halfEndYm}
+          reports={reports}
+          studentNick={currentStudent?.student_nick}
+          studentGrade={currentStudent?.student_grade}
+          enrollmentAnchorYm={anchorYm}
+          savedHalf={savedHalf}
+          halves={halves}
+        />
+      );
+    }
+
     return (
       <PeriodSavedViewShell
         studentId={studentId}
@@ -1156,18 +1252,50 @@ export function PeriodReportNewPage() {
   }
 
   const isQuarterComposer = !hId && !yId && draftUrlType === "3m";
+  const isHalfComposer = !hId && !yId && !qId && draftUrlType === "6m";
 
-  if (!hId && !yId && (draftUrlType === "6m" || draftUrlType === "12m")) {
+  if (!hId && !yId && !qId && draftUrlType === "12m") {
     return (
       <div className="mx-auto max-w-4xl space-y-4 p-6">
-        <p className="text-sm font-medium text-slate-800">이 화면은 분기별 레포트 작성 전용입니다.</p>
-        <p className="text-sm text-slate-600">
-          반기·연간 레포트는 이 주소로 신규 작성할 수 없습니다. 학생 상세에서 해당 메뉴를 이용해 주세요.
+        <p className="text-sm font-medium text-slate-800">이 화면은 분기·반기 레포트 작성 전용입니다.</p>
+        <p className="text-sm text-slate-600">연간 레포트는 학생 상세에서 해당 메뉴를 이용해 주세요.</p>
+        <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
+          ← 학생 상세
+        </Link>
+      </div>
+    );
+  }
+
+  if (isHalfComposer && !draftEndYm) {
+    return (
+      <div className="mx-auto max-w-4xl space-y-4 p-6">
+        <p className="text-sm font-medium text-slate-800">
+          반기 레포트는 학생 상세의 「반기별 레포트 생성하기」 링크로 들어와 주세요.
         </p>
         <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
           ← 학생 상세
         </Link>
       </div>
+    );
+  }
+
+  if (isHalfComposer && studentsLoading) {
+    return <div className="mx-auto max-w-4xl p-6 text-sm text-slate-600">학생 정보를 불러오는 중…</div>;
+  }
+
+  if (isHalfComposer && draftEndYm && studentId) {
+    const savedHalfForEdit = halves.find((h) => h.half_year_code === halfYearCodeForEndYm(draftEndYm)) ?? null;
+    return (
+      <HalfYearReportComposer
+        studentId={studentId}
+        endYm={draftEndYm}
+        reports={reports}
+        studentNick={currentStudent?.student_nick}
+        studentGrade={currentStudent?.student_grade}
+        enrollmentAnchorYm={anchorYm}
+        savedHalf={savedHalfForEdit}
+        halves={halves}
+      />
     );
   }
 
@@ -1404,7 +1532,7 @@ export function PeriodReportNewPage() {
                 <label className="block text-sm font-medium text-slate-800">
                   지식·수업 타당성 코멘트
                   <textarea
-                    className="mt-1 min-h-[120px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm leading-relaxed text-slate-900"
+                    className="mt-1 min-h-[220px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm leading-relaxed text-slate-900"
                     value={knowledgeCommentForUi}
                     onChange={(e) => mergeMindmapKnowledgeComment(e.target.value)}
                     disabled={!mindmapRecord}
@@ -1571,7 +1699,7 @@ export function PeriodReportNewPage() {
                     <label className="block text-sm font-medium text-slate-800">
                       긍정적 행동 패턴에 대한 코멘트
                       <textarea
-                        className="mt-1 min-h-[120px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900"
+                        className="mt-1 min-h-[200px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900"
                         value={roadmapText}
                         onChange={(e) => setRoadmapText(e.target.value)}
                         placeholder="아이가 반복적으로 보여 준 태도를 바탕으로, 학부모에게 전하는 한 덩어리의 메시지를 적어 주세요."

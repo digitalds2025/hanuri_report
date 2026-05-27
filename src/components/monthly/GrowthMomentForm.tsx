@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { generateGrowthMomentWithGemini } from "../../lib/geminiGrowthMoment";
+import type { ReportPrivacyContext } from "../../lib/reportStudentPrivacy";
 import {
   PRESET_ACTIVITY_KEYWORDS,
   PRESET_ATTITUDE_KEYWORDS,
@@ -20,6 +21,7 @@ type Props = {
   onGrowthTextChange: (t: string) => void;
   /** true면 키워드·메모만 (위저드 1단). AI·본문 textarea 숨김 */
   inputsOnly?: boolean;
+  reportPrivacy?: ReportPrivacyContext;
 };
 
 function toggleInList(list: string[], item: string): string[] {
@@ -133,6 +135,7 @@ export function GrowthMomentForm({
   growthText,
   onGrowthTextChange,
   inputsOnly = false,
+  reportPrivacy,
 }: Props) {
   const [aiBusy, setAiBusy] = useState(false);
   const [aiErr, setAiErr] = useState<string | null>(null);
@@ -145,11 +148,14 @@ export function GrowthMomentForm({
     }
     setAiBusy(true);
     try {
-      const text = await generateGrowthMomentWithGemini({
-        step1Activities: meta.step1,
-        step2Attitudes: meta.step2,
-        step3TeacherNotes: meta.step3,
-      });
+      const text = await generateGrowthMomentWithGemini(
+        {
+          step1Activities: meta.step1,
+          step2Attitudes: meta.step2,
+          step3TeacherNotes: meta.step3,
+        },
+        reportPrivacy,
+      );
       onGrowthTextChange(text);
     } catch (e) {
       setAiErr(e instanceof Error ? e.message : String(e));

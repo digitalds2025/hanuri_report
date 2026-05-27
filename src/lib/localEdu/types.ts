@@ -1,6 +1,7 @@
 import type { ParentAudience, SchoolLevel } from "../../config/koreaRegions";
 import type {
   BriefingLayoutSlide,
+  BriefingPlanningArtifact,
   BriefingSlidePlan,
   BriefingTopicCandidate,
   GuardrailReport,
@@ -57,6 +58,8 @@ export type ConsultKitOutput = {
 export type LocalEduPlanningOutput = {
   outline: MasterOutline;
   slidePlans: BriefingSlidePlan[];
+  /** 레포트 선행 4단계 산출물 */
+  planningArtifact: BriefingPlanningArtifact;
   tokenLedger: LocalEduTokenLedger;
 };
 

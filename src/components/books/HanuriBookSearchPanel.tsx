@@ -144,7 +144,16 @@ export function HanuriBookSearchPanel({
       }
       setBookSearchResults(rows);
     } catch (e) {
-      setBookSearchError(e instanceof Error ? e.message : String(e));
+      const raw = e instanceof Error ? e.message : String(e);
+      if (raw === "Failed to fetch" || raw.includes("NetworkError")) {
+        setBookSearchError(
+          isSupabaseConfigured()
+            ? "도서함(Supabase)에 연결하지 못했습니다. .env 의 VITE_SUPABASE_URL·ANON_KEY와 네트워크를 확인해 주세요."
+            : "로컬 도서함 API에 연결하지 못했습니다. `npm run dev` 로 실행 중인지 확인해 주세요.",
+        );
+      } else {
+        setBookSearchError(raw);
+      }
       setBookSearchResults([]);
     } finally {
       setBookSearchBusy(false);

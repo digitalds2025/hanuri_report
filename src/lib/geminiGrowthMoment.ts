@@ -1,3 +1,9 @@
+import {
+  applyReportPrivacy,
+  REPORT_NO_PII_PROMPT_RULES,
+  sanitizeReportStudentPii,
+  type ReportPrivacyContext,
+} from "./reportStudentPrivacy";
 import { stripAiPlainText } from "./reportPlainText";
 
 export type GrowthMomentInput = {
@@ -18,11 +24,14 @@ function getModel(): string {
   return m || "gemini-2.0-flash";
 }
 
-function buildPrompt(input: GrowthMomentInput): string {
+function buildPrompt(input: GrowthMomentInput, privacy?: ReportPrivacyContext): string {
   const s1 = input.step1Activities.join(", ");
   const s2 = input.step2Attitudes.join(", ");
-  const s3 = input.step3TeacherNotes.trim();
+  const s3Raw = input.step3TeacherNotes.trim();
+  const s3 = privacy ? sanitizeReportStudentPii(s3Raw, privacy) : s3Raw;
   return `당신은 한국의 독서·토론·논술 학원에서 학부모에게 보내는 월간 성장 리포트를 작성하는 교사입니다.
+
+${REPORT_NO_PII_PROMPT_RULES}
 
 아래는 한 학생의 이번 달 기록입니다.
 
@@ -47,7 +56,10 @@ ${s3 || "(없음)"}
 }
 
 /** Gemini REST generateContent — 3문단 성장 모멘트 텍스트 */
-export async function generateGrowthMomentWithGemini(input: GrowthMomentInput): Promise<string> {
+export async function generateGrowthMomentWithGemini(
+  input: GrowthMomentInput,
+  privacy?: ReportPrivacyContext,
+): Promise<string> {
   const key = getApiKey();
   if (!key) {
     throw new Error("VITE_GEMINI_API_KEY 가 .env 에 설정되어 있지 않습니다.");
@@ -59,7 +71,7 @@ export async function generateGrowthMomentWithGemini(input: GrowthMomentInput): 
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: buildPrompt(input) }] }],
+      contents: [{ parts: [{ text: buildPrompt(input, privacy) }] }],
       generationConfig: {
         temperature: 0.65,
         maxOutputTokens: 2048,
@@ -100,5 +112,5 @@ export async function generateGrowthMomentWithGemini(input: GrowthMomentInput): 
   if (!trimmed) {
     throw new Error("Gemini가 빈 텍스트를 반환했습니다.");
   }
-  return stripAiPlainText(trimmed);
+  return applyReportPrivacy(stripAiPlainText(trimmed), privacy);
 }

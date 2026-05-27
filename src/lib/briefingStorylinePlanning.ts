@@ -1,3 +1,4 @@
+import { normalizeSlidePlan } from "./briefingSlidePlanNormalize";
 import type {
   BriefingSlidePlan,
   BriefingStorylineBrief,
@@ -7,13 +8,7 @@ import type {
   StoryPhase,
 } from "./briefingMaterialTypes";
 
-export type ScreenChunk = {
-  label: string;
-  sublabel?: string;
-  emphasis?: boolean;
-};
-
-const PPT_BLOCK_ORDER = [
+const DEFAULT_BLOCK_ORDER = [
   "cover",
   "how_to_read",
   "local_context",
@@ -25,6 +20,12 @@ const PPT_BLOCK_ORDER = [
   "sources",
   "cta",
 ] as const;
+
+function outlineBlockOrder(outline: MasterOutline): string[] {
+  if (outline.selectedBlockIds?.length) return [...outline.selectedBlockIds];
+  const fromBlocks = outline.blocks.map((b) => b.blockId);
+  return fromBlocks.length ? fromBlocks : [...DEFAULT_BLOCK_ORDER];
+}
 
 export function truncate(s: string, max: number): string {
   if (s.length <= max) return s;
@@ -49,14 +50,33 @@ export function extractHeroMetric(fact: string): { value: string; label: string 
       label: truncate(toNounKeyword(fact.replace(pct[0], "").trim()) || "지표", 56),
     };
   }
+  const students = fact.match(/(\d{1,3}(?:,\d{3})*)\s*명/);
+  if (students) {
+    return {
+      value: `${students[1]}명`,
+      label: truncate(toNounKeyword(fact.replace(students[0], "").trim()) || "학생 수", 56),
+    };
+  }
   const num = fact.match(/(\d+(?:\.\d+)?)/);
   if (num) {
+    if (/^\d{4}$/.test(num[1])) return null;
+    const n = parseFloat(num[1]);
+    if (n <= 10 && !fact.includes("%")) return null;
     return {
       value: num[1],
       label: truncate(toNounKeyword(fact.replace(num[0], "").trim()) || "지표", 56),
     };
   }
   return null;
+}
+
+/** 제목·라벨용 — 문장 중간 절단 완화 */
+export function truncateAtWord(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const lastSpace = cut.lastIndexOf(" ");
+  if (lastSpace > max * 0.5) return cut.slice(0, lastSpace).trim() + "…";
+  return cut.trimEnd() + "…";
 }
 
 export function layoutForContent(
@@ -73,7 +93,11 @@ export function layoutForContent(
   if (blockId === "brand_solution") return { layout: "ICON_GRID", visualHint: "icon_grid" };
 
   const hasMetric = refs.some((r) => extractHeroMetric(r.fact));
-  if (hasMetric && refs.length <= 2) return { layout: "METRIC", visualHint: "big_number" };
+  const metricRef = refs.find((r) => extractHeroMetric(r.fact));
+  if (metricRef && extractHeroMetric(metricRef.fact) && refs.length <= 2) {
+    return { layout: "METRIC", visualHint: "big_number" };
+  }
+  if (refs.length >= 2) return { layout: "DATA_TABLE", visualHint: "table" };
   if (refs.length >= 3 && refs.some((r) => /비교|대비|vs|학교/.test(r.fact))) {
     return { layout: "COMPARISON", visualHint: "comparison" };
   }
@@ -91,45 +115,12 @@ export function layoutForContent(
   return { layout: "STAT_GRID", visualHint: "stat_grid" };
 }
 
-function phaseForIndex(index: number, total: number): StoryPhase {
+export function phaseForIndex(index: number, total: number): StoryPhase {
   const r = index / total;
   if (r < 0.15) return "intro";
   if (r < 0.65) return "development";
   if (r < 0.85) return "climax";
   return "closing";
-}
-
-function buildScreenChunks(
-  bullets: string[],
-  refs: SlideDataRef[],
-  layout: string,
-): ScreenChunk[] {
-  const chunks: ScreenChunk[] = [];
-  if (layout === "METRIC" && refs[0]) {
-    const m = extractHeroMetric(refs[0].fact);
-    if (m) return [{ label: m.value, sublabel: m.label, emphasis: true }];
-  }
-  if (layout === "COMPARISON") {
-    const left = refs.slice(0, 2).map((r) => ({
-      label: truncate(toNounKeyword(r.category), 28),
-      emphasis: true,
-    }));
-    return left.slice(0, 3);
-  }
-  for (const b of bullets.slice(0, 3)) {
-    chunks.push({ label: toNounKeyword(b) || truncate(b, 40) });
-  }
-  if (chunks.length < 3) {
-    for (const r of refs.slice(0, 3 - chunks.length)) {
-      const m = extractHeroMetric(r.fact);
-      chunks.push(
-        m
-          ? { label: m.value, sublabel: truncate(m.label, 36), emphasis: true }
-          : { label: truncate(toNounKeyword(r.fact), 40) },
-      );
-    }
-  }
-  return chunks.slice(0, 3);
 }
 
 function buildSpeakerNotes(
@@ -162,40 +153,26 @@ function planFromSlot(
   block: MasterOutlineBlock | null,
   refs: SlideDataRef[],
   phase: StoryPhase,
-  blockId?: string,
+  blockId: string | undefined,
+  regionLabel: string,
+  catalog: SlideDataRef[],
 ): BriefingSlidePlan {
-  const bullets = block?.bulletPoints ?? [];
   const { layout, visualHint } = layoutForContent(blockId, refs, phase);
-  const screenChunks = buildScreenChunks(bullets, refs, layout);
-  const hero = refs[0] ? extractHeroMetric(refs[0].fact) : null;
-
-  return {
-    slideNumber,
-    title,
-    purpose,
-    storyPhase: phase,
-    recommendedLayout: layout,
-    visualHint,
-    dataRefs: refs.slice(0, 5),
-    slideContentPlan: [
-      `【슬라이드 내용】${title}`,
-      `한 줄 메시지: ${purpose}`,
-      refs.length
-        ? `근거 데이터: ${refs.map((r) => `${r.category} — ${truncate(r.fact, 120)}`).join(" / ")}`
-        : "수집 fact 연결 필요",
-      hero
-        ? `화면 핵심 수치: ${hero.value} (${hero.label})`
-        : `화면 키워드: ${screenChunks.map((c) => c.label).join(", ")}`,
-      `발표 시 화면은 최소·멘트에서 수치·사례를 풀어 설명`,
-    ].join("\n"),
-    screenChunks,
-    keyMessages: screenChunks.map((c) =>
-      c.sublabel ? `${c.label} · ${c.sublabel}` : c.label,
-    ),
-    heroMetric: hero && layout === "METRIC" ? { ...hero, sourceFactId: refs[0]?.id } : undefined,
-    speakerNotes: buildSpeakerNotes(block, refs, phase, purpose),
-    blockId,
-  };
+  return normalizeSlidePlan(
+    {
+      slideNumber,
+      title,
+      purpose,
+      storyPhase: phase,
+      recommendedLayout: layout,
+      visualHint,
+      dataRefs: refs.slice(0, 6),
+      speakerNotes: buildSpeakerNotes(block, refs, phase, purpose),
+      blockId,
+    },
+    catalog.length ? catalog : refs,
+    regionLabel,
+  );
 }
 
 /** 요청 장수에 맞춘 슬라이드 슬롯 생성 */
@@ -219,9 +196,12 @@ export function buildStorylineSlideSlots(
   blockId?: string;
   phase?: StoryPhase;
 }> {
-  const blocks = PPT_BLOCK_ORDER.map((id) => outline.blocks.find((b) => b.blockId === id)).filter(
-    Boolean,
-  ) as MasterOutlineBlock[];
+  const order = outlineBlockOrder(outline);
+  const blocks = order
+    .map((id) => outline.blocks.find((b) => b.blockId === id))
+    .filter(Boolean) as MasterOutlineBlock[];
+  const extraBlocks = outline.blocks.filter((b) => !order.includes(b.blockId));
+  blocks.push(...extraBlocks);
 
   const slots: Array<{
     title: string;
@@ -235,14 +215,21 @@ export function buildStorylineSlideSlots(
   let factIdx = 0;
   const usedFactIds = new Set<string>();
 
+  const topicKw = outline.topicTitle.toLowerCase();
+
   function pickFacts(n: number, keywords: string): SlideDataRef[] {
-    const kw = keywords.toLowerCase();
+    const kw = `${keywords} ${outline.topicTitle}`.toLowerCase();
     const scored = catalog
       .filter((f) => !usedFactIds.has(f.id))
       .map((f) => {
-        const hay = `${f.category} ${f.fact}`.toLowerCase();
+        const hay = `${f.category} ${f.fact} ${f.sourceTitle ?? ""}`.toLowerCase();
         let score = extractHeroMetric(f.fact) ? 3 : 0;
+        if (/조선일보|중앙일보|맘카페|블로그/.test(hay)) score -= 15;
+        if (/학교알리미|교육청|kess|어디가|평가계획/.test(hay)) score += 4;
         for (const w of kw.split(/\s+/).filter((x) => x.length > 2)) {
+          if (hay.includes(w)) score += 2;
+        }
+        for (const w of topicKw.split(/\s+/).filter((x) => x.length > 2)) {
           if (hay.includes(w)) score += 2;
         }
         return { f, score };
@@ -329,10 +316,9 @@ export function buildStorylineSlideSlots(
     if (!ref) break;
     usedFactIds.add(ref.id);
     factIdx++;
-    const hero = extractHeroMetric(ref.fact);
     slots.push({
-      title: hero ? hero.label : truncate(ref.category, 40),
-      purpose: "수집 데이터 기반 전개 슬라이드",
+      title: truncateAtWord(ref.fact, 56) || ref.category,
+      purpose: outline.topicTitle,
       block: null,
       refs: [ref],
       blockId: "data_spotlight",
@@ -387,6 +373,8 @@ export function buildPlansForPageCount(
       slot.refs,
       slot.phase ?? phaseForIndex(i, targetCount),
       slot.blockId,
+      outline.regionLabel,
+      catalog,
     ),
   );
   if (storyline) {

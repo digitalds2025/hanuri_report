@@ -11,8 +11,9 @@ type TokenUsagePanelProps = {
 const STAGE_LABELS: Record<keyof LocalEduTokenLedger, string> = {
   dataCollection: "① 데이터 수집",
   topicSelection: "② 주제 선정",
-  slidePlanning: "③ 슬라이드 기획 (마스터 아웃라인)",
-  slideProduction: "④ 슬라이드 제작 (조립·상담키트)",
+  manuscript: "③ 설명자료 줄글 (종합 레포트)",
+  slidePlanning: "④ 슬라이드 기획",
+  slideProduction: "⑤ 슬라이드 제작 (조립·상담키트)",
 };
 
 function totalLedger(ledger: LocalEduTokenLedger) {
@@ -40,6 +41,7 @@ export function TokenUsagePanel({
           const order: (keyof LocalEduTokenLedger)[] = [
             "dataCollection",
             "topicSelection",
+            "manuscript",
             "slidePlanning",
             "slideProduction",
           ];

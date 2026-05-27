@@ -1,3 +1,10 @@
+import {
+  applyReportPrivacy,
+  REPORT_NO_PII_PROMPT_RULES,
+  sanitizeReportStudentPii,
+  type ReportPrivacyContext,
+} from "./reportStudentPrivacy";
+
 /** finalize 전용: 값이 `{...}` 형태여도 마인드맵용 JSON 추출 로직을 타지 않고 줄바꿈만 정리 */
 function normalizeFinalizeString(raw: string): string {
   return raw
@@ -158,12 +165,14 @@ function parseFinalizeModelJson(raw: string): { bestWritingComment: string; teac
 }
 
 export type QuarterReportFinalizeInput = {
-  studentLabel: string;
+  /** 학년·급 표기만 (닉네임·실명 금지) */
+  gradeLabel: string;
   quarterLabel: string;
   knowledgeMindmapComment: string;
   insightKeywords: [string, string, string];
   insightPositiveComment: string;
   teacherSeedMessage: string;
+  privacy?: ReportPrivacyContext;
 };
 
 export type QuarterReportFinalizeResult = {
@@ -218,7 +227,7 @@ function buildFinalizeFallback(input: QuarterReportFinalizeInput): QuarterReport
   let paragraph1 = p1Parts.join(" ").replace(/\s+/g, " ").trim();
   if (paragraph1.length > 320) paragraph1 = paragraph1.slice(0, 317).trimEnd() + "…";
   if (paragraph1.length < 80) {
-    paragraph1 = `${paragraph1} ${input.studentLabel} 학생만의 속도와 방식을 존중하며 지켜보고 있습니다.`.trim();
+    paragraph1 = `${paragraph1} 아이만의 속도와 방식을 존중하며 지켜보고 있습니다.`.trim();
   }
 
   const paragraph2 =
@@ -233,25 +242,33 @@ function buildFinalizeFallback(input: QuarterReportFinalizeInput): QuarterReport
  * (마인드맵 텍스트·성장 인사이트·초안 한마디를 모두 반영; 응답이 비면 로컬 폴백으로 채웁니다.)
  */
 export async function generateQuarterReportFinalize(input: QuarterReportFinalizeInput): Promise<QuarterReportFinalizeResult> {
+  const privacy = input.privacy;
   const [k1, k2, k3] = input.insightKeywords;
-  const block = [
-    "## 지식·수업 타당성(마인드맵 생성 텍스트)",
-    input.knowledgeMindmapComment.trim() || "(없음)",
-    "",
-    "## 성장 인사이트 — 핵심 태도·자세·모습 (3가지)",
-    [k1, k2, k3].filter(Boolean).join(" · ") || "(없음)",
-    "",
-    "## 성장 인사이트 — 긍정적 행동 패턴에 대한 코멘트",
-    input.insightPositiveComment.trim() || "(없음)",
-    "",
-    "## 선생님이 적은 따뜻한 한마디 (초안)",
-    input.teacherSeedMessage.trim(),
-  ].join("\n");
+  const block = sanitizeReportStudentPii(
+    [
+      "## 지식·수업 타당성(마인드맵 생성 텍스트)",
+      input.knowledgeMindmapComment.trim() || "(없음)",
+      "",
+      "## 성장 인사이트 — 핵심 태도·자세·모습 (3가지)",
+      [k1, k2, k3].filter(Boolean).join(" · ") || "(없음)",
+      "",
+      "## 성장 인사이트 — 긍정적 행동 패턴에 대한 코멘트",
+      input.insightPositiveComment.trim() || "(없음)",
+      "",
+      "## 선생님이 적은 따뜻한 한마디 (초안)",
+      input.teacherSeedMessage.trim(),
+    ].join("\n"),
+    privacy,
+  );
+
+  const gradeLabel = input.gradeLabel.trim() || "해당 학년";
 
   const prompt = `당신은 초·중·고 독서·국어 교육 현장의 전문 교사입니다. 학부모에게 전달하는 한국어 문장만 씁니다.
 
+${REPORT_NO_PII_PROMPT_RULES}
+
 ## 맥락
-- 학생(또는 학급 표기): **${input.studentLabel}**
+- 학년·급(식별용): **${gradeLabel}** — 본문에도 **학년·급만** 쓰고 이름·닉네임은 쓰지 마세요.
 - 분기(또는 기간 표기): **${input.quarterLabel}**
 
 ${block}
@@ -271,7 +288,7 @@ ${block}
 - 위 **지식 마인드맵**, **성장 인사이트(3가지 + 긍정 패턴 코멘트)**, **따뜻한 한마디 초안**을 **모두 반영**해, 학부모가 읽는 **레포트 안의 한 블록**처럼 씁니다.
 - **정확히 2개 문단**만. 문단 사이는 \\n\\n 한 번. 제목·머리말·글머리표 없음.
 - **절대 금지**: 「학부모님(께/에게)」「안녕하세요」「안녕하십니까」「존경하는」「편지를 받으시면」「말씀드리」 등 **인사·서두·편지 형식**으로 시작하는 문장. **바로 관찰·격려 본문**부터 시작하세요. (예: 우리 아이는… / 교실에서 보이는 … 처럼 본론으로 시작)
-- 1문단: **1~2문장**. 아이의 **성품·태도·잠재력**을 구체적으로 짚고, 부족해 보일 수 있는 면도 **긍정적으로 재해석**(예: 느림 → 납득할 때까지 파고드는 끈기). **${input.studentLabel}**에게만 해당하는 듯한 표현·은유를 허용합니다.
+- 1문단: **1~2문장**. 아이의 **성품·태도·잠재력**을 구체적으로 짚고, 부족해 보일 수 있는 면도 **긍정적으로 재해석**(예: 느림 → 납득할 때까지 파고드는 끈기). **이름 없이** 이 아이에게 해당하는 듯한 표현·은유를 허용합니다.
 - 2문단: **1~2문장**. 교사 **1인칭(저는 …)**으로, 아이의 속도를 **존중**하고 **곁에서 지지**하겠다는 태도, **다음 차시·다음 분기** 격려로 마무리합니다. (과한 공문체·나열 금지)
 - 톤·길이: 첨부 예시와 비슷한 **따뜻함·호흡** — **전체 약 260~420자**(짧은 2문단, 총 문장 수 대략 3~5개 수준). 초안의 감정선을 유지하되 장황하게 늘리지 마세요. 빈 문자열 금지.
 
@@ -287,9 +304,13 @@ ${block}
   }
 
   const parsed = parseFinalizeModelJson(raw);
-  const bestWritingComment = (parsed?.bestWritingComment?.trim() || fb.bestWritingComment).trim();
-  const teacherExpanded = stripTeacherReportSalutations(
-    (parsed?.teacherExpanded?.trim() || fb.teacherExpanded).trim(),
+  const bestWritingComment = applyReportPrivacy(
+    (parsed?.bestWritingComment?.trim() || fb.bestWritingComment).trim(),
+    privacy,
+  );
+  const teacherExpanded = applyReportPrivacy(
+    stripTeacherReportSalutations((parsed?.teacherExpanded?.trim() || fb.teacherExpanded).trim()),
+    privacy,
   );
 
   return { bestWritingComment, teacherExpanded };

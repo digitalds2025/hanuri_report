@@ -13,10 +13,32 @@ function yes24RemoteApiKey(): string {
 }
 
 function yes24SearchUrl(): string {
-  const base = yes24RemoteBaseUrl();
   const path = "/api/local/books/yes24-search";
+  /** 로컬 `npm run dev` — Vite 플러그인(동일 출처). Cloud Run 직통은 CORS로 Failed to fetch 가 납니다. */
+  if (import.meta.env.DEV) return path;
+  const base = yes24RemoteBaseUrl();
   if (base) return `${base}${path}`;
   return path;
+}
+
+function wrapFetchError(err: unknown, context: "yes24" | "local-api"): never {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (raw === "Failed to fetch" || raw.includes("NetworkError") || raw.includes("Load failed")) {
+    if (context === "yes24") {
+      if (import.meta.env.DEV) {
+        throw new Error(
+          "YES24 도서 찾기 서버에 연결하지 못했습니다. `npm run dev` 로 실행 중인지 확인하고, 터미널에 Playwright 관련 오류가 없는지 봐 주세요.",
+        );
+      }
+      throw new Error(
+        "YES24 API(Cloud Run)에 연결하지 못했습니다. 네트워크·방화벽·VITE_YES24_API_URL / yes24CloudRun.ts 설정을 확인해 주세요.",
+      );
+    }
+    throw new Error(
+      "로컬 API에 연결하지 못했습니다. `npm run dev` 로 실행 중인지 확인해 주세요.",
+    );
+  }
+  throw err instanceof Error ? err : new Error(raw);
 }
 
 function yes24SearchHeaders(): Record<string, string> {
@@ -50,13 +72,21 @@ async function parseJson<T>(res: Response): Promise<T> {
   return JSON.parse(text) as T;
 }
 
+async function localFetch(input: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(input, init);
+  } catch (e) {
+    wrapFetchError(e, "local-api");
+  }
+}
+
 export async function localListStudents(): Promise<Student[]> {
-  const res = await fetch("/api/local/students");
+  const res = await localFetch("/api/local/students");
   return parseJson<Student[]>(res);
 }
 
 export async function localInsertStudent(input: { nickname: string; student_grade: string }): Promise<void> {
-  const res = await fetch("/api/local/students", {
+  const res = await localFetch("/api/local/students", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -65,13 +95,13 @@ export async function localInsertStudent(input: { nickname: string; student_grad
 }
 
 export async function localDeleteStudent(studentId: string): Promise<void> {
-  const res = await fetch(`/api/local/students/${encodeURIComponent(studentId)}`, { method: "DELETE" });
+  const res = await localFetch(`/api/local/students/${encodeURIComponent(studentId)}`, { method: "DELETE" });
   await parseJson<unknown>(res);
 }
 
 export async function localListMonthlyReports(studentId?: string): Promise<MonthlyReport[]> {
   const q = studentId ? `?student_id=${encodeURIComponent(studentId)}` : "";
-  const res = await fetch(`/api/local/monthly-reports${q}`);
+  const res = await localFetch(`/api/local/monthly-reports${q}`);
   return parseJson<MonthlyReport[]>(res);
 }
 
@@ -96,7 +126,7 @@ export async function localSaveMonthlyReport(input: {
   weakness_cmt?: string | null;
   book_keywords: Json;
 }): Promise<void> {
-  const res = await fetch("/api/local/monthly-reports", {
+  const res = await localFetch("/api/local/monthly-reports", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -105,7 +135,7 @@ export async function localSaveMonthlyReport(input: {
 }
 
 export async function localListBooks(): Promise<Book[]> {
-  const res = await fetch("/api/local/books");
+  const res = await localFetch("/api/local/books");
   return parseJson<Book[]>(res);
 }
 
@@ -180,11 +210,16 @@ export async function localYes24SearchBook(
   input: { title: string; author: string; publisher: string },
   options?: { onLog?: (message: string) => void },
 ): Promise<Yes24SearchResultPayload> {
-  const res = await fetch(yes24SearchUrl(), {
-    method: "POST",
-    headers: yes24SearchHeaders(),
-    body: JSON.stringify({ ...input, streamLogs: true }),
-  });
+  let res: Response;
+  try {
+    res = await fetch(yes24SearchUrl(), {
+      method: "POST",
+      headers: yes24SearchHeaders(),
+      body: JSON.stringify({ ...input, streamLogs: true }),
+    });
+  } catch (e) {
+    wrapFetchError(e, "yes24");
+  }
   if (!res.ok) {
     const text = await res.text();
     let msg = text;
@@ -213,7 +248,7 @@ export async function localUpsertBook(row: {
   ai_category?: string | null;
   ai_keywords: Json;
 }): Promise<string> {
-  const res = await fetch("/api/local/books/upsert", {
+  const res = await localFetch("/api/local/books/upsert", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -236,12 +271,12 @@ export async function localUpsertBook(row: {
 }
 
 export async function localListBriefingKits(): Promise<BriefingMaterialKit[]> {
-  const res = await fetch("/api/local/briefing-kits");
+  const res = await localFetch("/api/local/briefing-kits");
   return parseJson<BriefingMaterialKit[]>(res);
 }
 
 export async function localSaveBriefingKit(kit: BriefingMaterialKit): Promise<void> {
-  const res = await fetch("/api/local/briefing-kits", {
+  const res = await localFetch("/api/local/briefing-kits", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(kit),

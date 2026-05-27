@@ -107,6 +107,53 @@ export type MasterOutline = {
   targetLabel: string;
   purposeLabel: string;
   blocks: MasterOutlineBlock[];
+  /** 선택된 템플릿 blockId 순서 (없으면 blocks 순서) */
+  selectedBlockIds?: string[];
+  outlineSelectionRationale?: string;
+};
+
+/** Design Layer 1단계: 주제 기반 종합 레포트 원고 */
+export type BriefingFoundationReport = {
+  title: string;
+  markdown: string;
+  sections: { id: string; heading: string; body: string }[];
+  generatedAt: string;
+};
+
+/** Design Layer 2단계: 슬라이드 장수에 맞춘 확장 초안 */
+export type SlideContentDraft = {
+  slideNumber: number;
+  title: string;
+  narrative: string;
+  keyFacts: string[];
+  storyPhase?: StoryPhase;
+  suggestedLayout?: string;
+};
+
+/** Design Layer 3단계: 50종 템플릿 중 선택 결과 */
+export type OutlineSelectionResult = {
+  selectedBlockIds: string[];
+  rationale: string;
+  pptEffectiveness: string;
+  docxReadability: string;
+  discardedAlternatives?: string[];
+};
+
+/** Design Layer 4단계: PPT·자료집 컨셉 재작성 메모 */
+export type DeliverableAdaptation = {
+  pptConcept: string;
+  docxConcept: string;
+  toneNotes: string;
+  blockAdaptations: { blockId: string; pptAngle: string; docxAngle: string }[];
+};
+
+/** 레포트 선행 기획 산출물 (줄글 + 장수 분할 → 슬라이드 기획 입력) */
+export type BriefingPlanningArtifact = {
+  foundationReport: BriefingFoundationReport;
+  slideDrafts: SlideContentDraft[];
+  /** 레거시 4단계 파이프라인용 (선택) */
+  outlineSelection?: OutlineSelectionResult;
+  adaptation?: DeliverableAdaptation;
 };
 
 export type GuardrailIssue = {
@@ -144,30 +191,51 @@ export type HeroMetric = {
   sourceFactId?: string;
 };
 
+/** 슬라이드 기획 — 현상·분석·화면키워드 1세트 (최소 3세트/슬라이드) */
+export type SlideContextSet = {
+  /** 현상: corpus fact 기반 구체 서술 (학교명·수치·정책명) */
+  phenomenon: string;
+  /** 분석: 학부모·입시 관점 해석 */
+  analysis: string;
+  /** 화면 키워드/수치 — METRIC·TABLE·CHART 셀에 직접 매핑 */
+  screenKeyword: string;
+  screenDetail?: string;
+  mappedFactId?: string;
+};
+
+/** Hero Fact & Metric — 슬라이드 설득용 핵심 로컬 데이터 */
+export type SlideHeroFact = {
+  headline: string;
+  properNouns: string[];
+  metricValue?: string;
+  metricLabel?: string;
+  sourceFactId?: string;
+};
+
 /** 슬라이드별 기획안 — 기획 화면에서 편집 후 제작 단계로 전달 */
 export type BriefingSlidePlan = {
   slideNumber: number;
   title: string;
   purpose: string;
-  /** 설명회 스토리라인 단계 */
   storyPhase?: StoryPhase;
-  /** 권장 레이아웃 (TITLE, STAT_GRID, CHART_BAR, ICON_GRID, DATA_TABLE, …) */
   recommendedLayout: string;
-  /** chart_bar | stat_grid | icon_grid | comparison | table | checklist | timeline | title | section | big_number */
   visualHint: string;
-  /** 이 슬라이드에서 인용할 수집 fact */
   dataRefs: SlideDataRef[];
-  /** 이 슬라이드에 담을 내용 기획 (화면·멘트 요약, 편집 가능) */
+  /** 1) Hero Fact & Metric */
+  heroFact: SlideHeroFact;
+  /** 2) Context Body — 현상·분석·화면 (최소 3세트) */
+  contextSets: SlideContextSet[];
+  /** 3) Action Strategy — 한우리/학습 전략 연결 */
+  actionStrategy: string;
+  /** 컨설턴트 추론 인사이트 */
+  consultantInsight?: string;
+  /** 위 3요소를 합친 읽기용 기획서 (자동 생성·편집 가능) */
   slideContentPlan: string;
-  /** @deprecated slideContentPlan */
   contentPlan?: string;
-  /** 화면 레이어: 명사형 키워드 청크 (3-3 규칙, 최대 3) */
+  /** contextSets → 화면 레이어 파생 */
   screenChunks: ScreenChunk[];
-  /** 빅넘버 레이아웃용 — 수집 데이터 수치 */
   heroMetric?: HeroMetric;
-  /** @deprecated screenChunks 사용 — 제작 호환용 */
   keyMessages: string[];
-  /** 발표 멘트 레이어: 구어체·수치 근거·fact 원문 */
   speakerNotes: string;
   blockId?: string;
   keyPoints?: string[];

@@ -53,7 +53,7 @@ export function useStudentPeriodReports(studentId?: string) {
         supabase
           .from("h_reports")
           .select(
-            "h_report_id, half_year_code, reading_type_name, type_description, teacher_comment, score_reading, score_thinking, score_discussion, score_writing, score_growth, report ( created_at )",
+            "h_report_id, half_year_code, reading_type_name, type_logic_code, type_description, teacher_comment, score_reading, score_thinking, score_discussion, score_writing, score_growth, score_overview, score_reading_desc, score_thinking_desc, score_discussion_desc, score_writing_desc, score_growth_desc, gauge_high_pillar, gauge_low_pillar, gauge_high_desc, gauge_low_desc, report ( created_at )",
           )
           .eq("student_id", studentId)
           .order("half_year_code", { ascending: false }),
@@ -95,6 +95,7 @@ export function useStudentPeriodReports(studentId?: string) {
         h_report_id: String(row.h_report_id),
         half_year_code: String(row.half_year_code),
         reading_type_name: (row.reading_type_name as string | null) ?? null,
+        type_logic_code: (row.type_logic_code as string | null) ?? null,
         type_description: (row.type_description as string | null) ?? null,
         teacher_comment: (row.teacher_comment as string | null) ?? null,
         score_reading: Number(row.score_reading),
@@ -102,6 +103,16 @@ export function useStudentPeriodReports(studentId?: string) {
         score_discussion: Number(row.score_discussion),
         score_writing: Number(row.score_writing),
         score_growth: Number(row.score_growth),
+        score_overview: (row.score_overview as string | null) ?? null,
+        score_reading_desc: (row.score_reading_desc as string | null) ?? null,
+        score_thinking_desc: (row.score_thinking_desc as string | null) ?? null,
+        score_discussion_desc: (row.score_discussion_desc as string | null) ?? null,
+        score_writing_desc: (row.score_writing_desc as string | null) ?? null,
+        score_growth_desc: (row.score_growth_desc as string | null) ?? null,
+        gauge_high_pillar: (row.gauge_high_pillar as string | null) ?? null,
+        gauge_low_pillar: (row.gauge_low_pillar as string | null) ?? null,
+        gauge_high_desc: (row.gauge_high_desc as string | null) ?? null,
+        gauge_low_desc: (row.gauge_low_desc as string | null) ?? null,
         created_at: reportCreatedAt(row.report as ReportCreated | ReportCreated[]),
       }));
 

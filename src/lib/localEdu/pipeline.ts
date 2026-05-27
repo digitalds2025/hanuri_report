@@ -1,10 +1,10 @@
-import {
-  buildDocxSections,
-  buildMasterOutline,
-  recommendBriefingTopics,
-} from "../geminiBriefingKit";
+import { buildDocxSections, recommendBriefingTopics } from "../geminiBriefingKit";
 import { buildPerSlidePlans, produceSlidesFromPlans } from "../briefingSlidePlanning";
+import { buildOutlineFromReport } from "../briefingBookletWorkflow";
+import { expandReportToSlideDrafts, writeFoundationReport } from "../briefingReportPlanning";
+import { CORE_TOPIC_OPTIONS } from "./types";
 import type {
+  BriefingFoundationReport,
   BriefingSlidePlan,
   BriefingStorylineBrief,
   BriefingTopicCandidate,
@@ -39,10 +39,14 @@ export async function runLocalEduTopicRecommend(
 ): Promise<{ topics: BriefingTopicCandidate[]; tokenLedger: LocalEduTokenLedger }> {
   const form = localEduToFormInput(input, []);
   const formWithScan = { ...form, officialScan: data.scan };
+  const coreTopicLabels = input.coreTopics
+    .map((id) => CORE_TOPIC_OPTIONS.find((o) => o.id === id)?.label ?? "")
+    .filter((label) => label.length > 0);
   const { topics, usage } = await recommendBriefingTopics(
     attachmentText + "\n\n" + data.corpusMarkdown,
     formWithScan,
     data.scan,
+    { coreTopicLabels },
   );
   const ledger = { ...data.tokenLedger };
   ledger.topicSelection = addTokenUsage(
@@ -53,14 +57,55 @@ export async function runLocalEduTopicRecommend(
   return { topics, tokenLedger: ledger };
 }
 
-/** Design: 마스터 아웃라인 + 슬라이드별 기획안 */
-export async function runLocalEduSlidePlanning(
+/** Design: 선택 주제 + 수집 데이터 → 설명자료 줄글(종합 레포트) */
+export async function runLocalEduWriteManuscript(
   input: LocalEduInput,
   data: LocalEduDataLayerResult,
   topic: BriefingTopicCandidate,
   attachmentText: string,
   attachmentNames: string[],
+  onProgress?: (p: LocalEduProgress) => void,
+): Promise<{ report: BriefingFoundationReport; tokenLedger: LocalEduTokenLedger }> {
+  const form = localEduToFormInput(input, attachmentNames);
+  const formWithScan = {
+    ...form,
+    officialScan: data.scan,
+    selectedTopic: topic,
+    pageCount: input.pageCount,
+  };
+  const coreTopicLabels = input.coreTopics
+    .map((id) => CORE_TOPIC_OPTIONS.find((o) => o.id === id)?.label ?? "")
+    .filter((label) => label.length > 0);
+
+  onProgress?.({ layer: "design", message: "설명자료 줄글(종합 레포트) 작성 중…" });
+  const { report, usage } = await writeFoundationReport(
+    formWithScan,
+    topic,
+    data.corpusMarkdown,
+    attachmentText,
+    { coreTopicLabels },
+  );
+
+  const ledger = { ...data.tokenLedger };
+  ledger.manuscript = addTokenUsage(
+    emptyStageUsage(),
+    usage.inputTokens,
+    usage.outputTokens,
+  );
+
+  return { report, tokenLedger: ledger };
+}
+
+/** Design: 승인된 줄글 → 슬라이드 장수 분할 + 슬라이드별 기획 */
+export async function runLocalEduSlidePlanning(
+  input: LocalEduInput,
+  data: LocalEduDataLayerResult,
+  topic: BriefingTopicCandidate,
+  foundationReport: BriefingFoundationReport,
+  _attachmentText: string,
+  attachmentNames: string[],
   storylineBrief?: BriefingStorylineBrief | null,
+  tokenLedgerIn?: LocalEduTokenLedger,
   onProgress?: (p: LocalEduProgress) => void,
 ): Promise<LocalEduPlanningOutput> {
   const form = localEduToFormInput(input, attachmentNames);
@@ -70,25 +115,35 @@ export async function runLocalEduSlidePlanning(
     selectedTopic: topic,
     pageCount: input.pageCount,
   };
-  const ledger = { ...data.tokenLedger };
+  const ledger = { ...(tokenLedgerIn ?? data.tokenLedger) };
 
-  onProgress?.({ layer: "design", message: "마스터 아웃라인 조립 중…" });
-  const { outline, usage: outlineUsage } = await buildMasterOutline(
-    data.corpusMarkdown + "\n\n" + attachmentText,
+  onProgress?.({
+    layer: "design",
+    message: `줄글을 슬라이드 ${input.pageCount}장 분량으로 나누는 중…`,
+  });
+  const { drafts, usage: expandUsage } = await expandReportToSlideDrafts(
     formWithScan,
     topic,
+    foundationReport,
+    storylineBrief,
   );
   ledger.slidePlanning = addTokenUsage(
-    emptyStageUsage(),
-    outlineUsage.inputTokens,
-    outlineUsage.outputTokens,
+    ledger.slidePlanning ?? emptyStageUsage(),
+    expandUsage.inputTokens,
+    expandUsage.outputTokens,
   );
 
-  onProgress?.({ layer: "design", message: "슬라이드별 기획 (제목·목적·데이터·화면 구성)…" });
+  const artifact = { foundationReport, slideDrafts: drafts };
+
+  onProgress?.({ layer: "design", message: "슬라이드별 기획 (줄글 → PPT 기획안)…" });
+  const outline = buildOutlineFromReport(formWithScan, topic, foundationReport);
+
   const { plans, usage: planUsage } = await buildPerSlidePlans(
     formWithScan,
     outline,
     storylineBrief,
+    data.corpusMarkdown,
+    artifact,
   );
   ledger.slidePlanning = addTokenUsage(
     ledger.slidePlanning,
@@ -96,7 +151,7 @@ export async function runLocalEduSlidePlanning(
     planUsage.outputTokens,
   );
 
-  return { outline, slidePlans: plans, tokenLedger: ledger };
+  return { outline, slidePlans: plans, planningArtifact: artifact, tokenLedger: ledger };
 }
 
 /** Generation: 승인된 기획안 → 구조화 슬라이드 + 부가 산출물 */
@@ -189,13 +244,23 @@ export async function runLocalEduGeneration(
   attachmentNames: string[],
   onProgress?: (p: LocalEduProgress) => void,
 ): Promise<LocalEduGenerationOutput> {
-  const planning = await runLocalEduSlidePlanning(
+  const { report, tokenLedger: ledgerAfterMs } = await runLocalEduWriteManuscript(
     input,
     data,
     topic,
     attachmentText,
     attachmentNames,
+    onProgress,
+  );
+  const planning = await runLocalEduSlidePlanning(
+    input,
+    data,
+    topic,
+    report,
+    attachmentText,
+    attachmentNames,
     null,
+    ledgerAfterMs,
     onProgress,
   );
   return runLocalEduSlideProduction(
