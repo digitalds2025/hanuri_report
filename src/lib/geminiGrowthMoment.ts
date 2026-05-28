@@ -5,6 +5,10 @@ import {
   type ReportPrivacyContext,
 } from "./reportStudentPrivacy";
 import { stripAiPlainText } from "./reportPlainText";
+import {
+  enforceGrowthMomentParagraphLimits,
+  growthMomentEditorRulesBlock,
+} from "./growthMomentTextRules";
 
 export type GrowthMomentInput = {
   /** 1단: 활동 키워드 */
@@ -24,42 +28,7 @@ function getModel(): string {
   return m || "gemini-2.0-flash";
 }
 
-function buildPrompt(input: GrowthMomentInput, privacy?: ReportPrivacyContext): string {
-  const s1 = input.step1Activities.join(", ");
-  const s2 = input.step2Attitudes.join(", ");
-  const s3Raw = input.step3TeacherNotes.trim();
-  const s3 = privacy ? sanitizeReportStudentPii(s3Raw, privacy) : s3Raw;
-  return `당신은 한국의 독서·토론·논술 학원에서 학부모에게 보내는 월간 성장 리포트를 작성하는 교사입니다.
-
-${REPORT_NO_PII_PROMPT_RULES}
-
-아래는 한 학생의 이번 달 기록입니다.
-
-[1단 활동 영역 — 무엇을 했는가]
-${s1}
-
-[2단 태도·행동 — 어떤 모습이었는가]
-${s2}
-
-[3단 교사의 학습 기록 메모 — 참고용(없으면 무시)]
-${s3 || "(없음)"}
-
-작성 규칙:
-- 반드시 정확히 3개의 문단으로 작성합니다. 문단 사이에는 빈 줄 한 줄만 넣고, 실제 줄바꿈으로만 구분합니다.
-- 백슬래시(\\)나 작은따옴표로 감싼 '\\n' 같은 이스케이프 문자열을 본문에 쓰지 마세요.
-- 마크다운(예: # 제목, **굵게**, 불릿 기호)을 쓰지 마세요. 일반 문장만 사용합니다.
-- 1문단: 이번 달 핵심 활동(1단 키워드를 자연스럽게 녹여 구체적으로).
-- 2문단: 아이의 태도·행동(2단 키워드를 바탕으로 관찰 내용을 생생하게).
-- 3문단: 종합 및 격려(학부모에게 따뜻하고 신뢰 가는 톤, '~해요'체 위주).
-- 과장·단정 금지. 키워드에 없는 사실은 만들지 마세요. 3단 메모가 비어 있으면 3단은 언급을 최소화하세요.
-- 제목·번호·불릿 없이 본문만 출력합니다.`;
-}
-
-/** Gemini REST generateContent — 3문단 성장 모멘트 텍스트 */
-export async function generateGrowthMomentWithGemini(
-  input: GrowthMomentInput,
-  privacy?: ReportPrivacyContext,
-): Promise<string> {
+async function callGeminiText(prompt: string, temperature: number): Promise<string> {
   const key = getApiKey();
   if (!key) {
     throw new Error("VITE_GEMINI_API_KEY 가 .env 에 설정되어 있지 않습니다.");
@@ -71,9 +40,9 @@ export async function generateGrowthMomentWithGemini(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      contents: [{ parts: [{ text: buildPrompt(input, privacy) }] }],
+      contents: [{ parts: [{ text: prompt }] }],
       generationConfig: {
-        temperature: 0.65,
+        temperature,
         maxOutputTokens: 2048,
       },
     }),
@@ -112,5 +81,40 @@ export async function generateGrowthMomentWithGemini(
   if (!trimmed) {
     throw new Error("Gemini가 빈 텍스트를 반환했습니다.");
   }
-  return applyReportPrivacy(stripAiPlainText(trimmed), privacy);
+  return stripAiPlainText(trimmed);
+}
+
+function buildPrompt(input: GrowthMomentInput, privacy?: ReportPrivacyContext): string {
+  const s1 = input.step1Activities.join(", ");
+  const s2 = input.step2Attitudes.join(", ");
+  const s3Raw = input.step3TeacherNotes.trim();
+  const s3 = privacy ? sanitizeReportStudentPii(s3Raw, privacy) : s3Raw;
+  return `${growthMomentEditorRulesBlock()}
+
+${REPORT_NO_PII_PROMPT_RULES}
+
+# [제공 데이터 — 이번 달 기록]
+[1단 활동 영역 — 무엇을 했는가]
+${s1}
+
+[2단 태도·행동 — 어떤 모습이었는가]
+${s2}
+
+[3단 교사의 학습 기록 메모 — 참고용(없으면 최소 반영)]
+${s3 || "(없음)"}
+
+# [작업]
+위 데이터만 근거로 **이달의 성장 모멘트** 한 섹션을 작성하세요. 화면용으로 3문단으로 나누되, **한 편의 글처럼** 이어지게 쓰세요. 과장·단정 금지.`;
+}
+
+/** Gemini REST generateContent — 3문단 성장 모멘트 텍스트 */
+export async function generateGrowthMomentWithGemini(
+  input: GrowthMomentInput,
+  privacy?: ReportPrivacyContext,
+): Promise<string> {
+  const draft = await callGeminiText(buildPrompt(input, privacy), 0.55);
+  const limited = await enforceGrowthMomentParagraphLimits(draft, (prompt) =>
+    callGeminiText(prompt, 0.4),
+  );
+  return applyReportPrivacy(limited, privacy);
 }

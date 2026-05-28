@@ -8,6 +8,10 @@ import {
   type ReportPrivacyContext,
 } from "./reportStudentPrivacy";
 import { stripAiPlainText } from "./reportPlainText";
+import {
+  enforceGrowthMomentParagraphLimits,
+  growthMomentEditorRulesBlock,
+} from "./growthMomentTextRules";
 
 export type MonthlyReportBookContext = {
   title: string;
@@ -166,18 +170,15 @@ function promptGrowthMoment(ctx: MonthlyReportAIContext, privacy?: ReportPrivacy
 
 ${REPORT_NO_PII_PROMPT_RULES}
 
-아래는 한 학생에 대한 이번 달 **전체 관찰·입력**입니다. 이 내용만 근거로 작성하세요. 없는 사실은 지어내지 마세요.
+아래 [제공 데이터]만 근거로 작성하세요. 없는 사실은 지어내지 마세요.
 
+# [제공 데이터]
 ${contextBlock(ctx, privacy)}
 
-작업: **이달의 성장 모멘트** 본문만 작성합니다.
-- 정확히 **3개 문단**, 문단 사이는 빈 줄 한 줄(실제 줄바꿈)만 사용합니다.
-- 백슬래시나 '\\n' 같은 이스케이프 문자열을 본문에 출력하지 마세요.
-- 마크다운(#, **, 불릿 등)을 쓰지 마세요. 일반 문장만 사용합니다.
-- 1문단: 이번 달 핵심 **활동**(무엇을 했는지) — 1단 키워드와 도서·글쓰기 맥락을 자연스럽게 녹임.
-- 2문단: **학습 태도·행동**(어떤 모습이었는지) — 2단 키워드와 역량 코멘트·점수 경향이 말해주는 관찰을 생생하게(단정·과장 금지).
-- 3문단: **교사가 본 이번 달 성장 모멘트**를 종합해 격려하는 문단(학부모에게 신뢰 가는 톤, '~해요'체 위주).
-- 제목·번호·불릿 없이 본문만.`;
+${growthMomentEditorRulesBlock()}
+
+# [작업]
+위 [제공 데이터]만 근거로 **이달의 성장 모멘트** 한 섹션을 작성하세요. 화면용 3문단이지만 **한 편의 글처럼** 이어지게, 본문만 출력하세요.`;
 }
 
 function promptCompetency(ctx: MonthlyReportAIContext, privacy?: ReportPrivacyContext): string {
@@ -227,13 +228,17 @@ export async function generateMonthlyReportBundle(
   privacy?: ReportPrivacyContext,
 ): Promise<MonthlyReportAIResult> {
   const [growthRes, competencyRes, warmRes] = await Promise.all([
-    geminiGenerateText(promptGrowthMoment(ctx, privacy), 0.62),
+    geminiGenerateText(promptGrowthMoment(ctx, privacy), 0.55),
     geminiGenerateText(promptCompetency(ctx, privacy), 0.5),
     geminiGenerateText(promptWarm(ctx, privacy), 0.68),
   ]);
+  const growthLimited = await enforceGrowthMomentParagraphLimits(growthRes.text, async (prompt) => {
+    const r = await geminiGenerateText(prompt, 0.4);
+    return r.text;
+  });
   const parts = [growthRes, competencyRes, warmRes];
   return {
-    growthMoment: applyReportPrivacy(growthRes.text, privacy),
+    growthMoment: applyReportPrivacy(growthLimited, privacy),
     competencyAnalysis: applyReportPrivacy(competencyRes.text, privacy),
     warmMessage: applyReportPrivacy(warmRes.text, privacy),
     tokenUsage: {

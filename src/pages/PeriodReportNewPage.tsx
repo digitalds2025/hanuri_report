@@ -2,7 +2,9 @@ import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 import {
+  annualTargetYearForEndYm,
   dateRangeForPeriodEndingInMonth,
+  endYmForAnnualTargetYear,
   endYmForHalfYearCode,
   halfYearCodeForEndYm,
   enrollmentYearMonth,
@@ -31,6 +33,11 @@ import { useMonthlyReports } from "../hooks/useMonthlyReports";
 import { useStudentPeriodReports } from "../hooks/useStudentPeriodReports";
 import { useStudents } from "../hooks/useStudents";
 import type { HalfReportRow, YearReportRow } from "../lib/studentPeriodReportsTypes";
+import { AnnualReportComposer } from "../components/annual/AnnualReportComposer";
+import { AnnualReportSections, timelineMonthsFromJson, type AnnualReportViewModel } from "../components/annual/AnnualReportSections";
+import { annualRoundRangeLabel, annualRoundYearMonths } from "../lib/annualReportCompute";
+import { buildTimelineSlotDisplay, parseAnnualTimeline } from "../lib/annualReportTypes";
+import { mergeWarmSectionFromSaved } from "../lib/annualWarmSection";
 import { HalfYearReportComposer } from "../components/half/HalfYearReportComposer";
 import { HalfYearReportSections, type HalfYearReportViewModel } from "../components/half/HalfYearReportSections";
 import { ReportSection } from "../components/monthly/MonthlyReportResultView";
@@ -154,16 +161,6 @@ function formatQuarterLabelKo(quarterYear: string): string {
   const m = /^(\d{4})-(\d)Q$/.exec(quarterYear);
   if (!m) return quarterYear;
   return `${m[1]}년 제${m[2]}분기`;
-}
-
-function formatScoresLine(sc: {
-  score_reading: number;
-  score_thinking: number;
-  score_discussion: number;
-  score_writing: number;
-  score_growth: number;
-}): string {
-  return `독서 ${sc.score_reading} · 사고 ${sc.score_thinking} · 토론 ${sc.score_discussion} · 글쓰기 ${sc.score_writing} · 성장 ${sc.score_growth}`;
 }
 
 /** 분기 mindmap_data(summaryText) — 객체가 아니면 null */
@@ -407,7 +404,37 @@ function HalfSavedBody({ row }: { row: HalfReportRow }) {
   );
 }
 
-function YearSavedBody({ row }: { row: YearReportRow }) {
+function yearReportToViewModel(row: YearReportRow, anchorYm: string): AnnualReportViewModel {
+  const roundYms = anchorYm ? annualRoundYearMonths(anchorYm, 12) : [];
+  const slotMeta = roundYms.map((ym, idx) => ({
+    slotIndex: idx + 1,
+    month: Number(ym.slice(5, 7)),
+    ym,
+  }));
+  const parsed = parseAnnualTimeline(row.annual_timeline);
+  const outlook =
+    row.outlook_comment?.trim() || parsed.outlook?.trim() || "";
+  const summaries = timelineMonthsFromJson(parsed.months);
+  const round12Ym = roundYms[11] ?? "";
+  return {
+    yearLabel: `${row.target_year}년`,
+    windowLabel: anchorYm ? annualRoundRangeLabel(anchorYm) : "",
+    timelineSlots: buildTimelineSlotDisplay(slotMeta, summaries),
+    outlook,
+    totalBooks: row.total_books,
+    litCount: row.book_lit_count,
+    nonLitCount: row.book_non_lit_count,
+    litRatio: row.lit_ratio,
+    nonLitRatio: row.non_lit_ratio,
+    warmSectionText: mergeWarmSectionFromSaved(row.roadmap_text, row.teacher_comment),
+    certText: row.cert_text ?? "",
+    certGradeLabel: row.cert_grade_label ?? "",
+    certDateLabel: round12Ym ? `${round12Ym.slice(0, 4)}.${round12Ym.slice(5, 7)}.${new Date(Number(round12Ym.slice(0, 4)), Number(round12Ym.slice(5, 7)), 0).getDate()}` : `${row.target_year}.12.31`,
+  };
+}
+
+function YearSavedBody({ row, anchorYm }: { row: YearReportRow; anchorYm: string }) {
+  const vm = yearReportToViewModel(row, anchorYm);
   return (
     <>
       <div>
@@ -415,16 +442,7 @@ function YearSavedBody({ row }: { row: YearReportRow }) {
         <p className="mt-1 text-base font-semibold text-slate-900">{row.target_year}년</p>
         <p className="mt-1 text-sm text-slate-600">발행 {formatPublishedYmd(row.created_at)}</p>
       </div>
-      <div>
-        <p className="text-xs font-medium text-slate-500">5대 역량</p>
-        <p className="mt-1 text-sm text-slate-800">{formatScoresLine(row)}</p>
-      </div>
-      <div>
-        <p className="text-xs font-medium text-slate-500">연간 타임라인 (JSON)</p>
-        <pre className="mt-1 max-h-80 overflow-auto rounded-lg bg-slate-50 p-3 font-mono text-xs text-slate-800">
-          {JSON.stringify(row.annual_timeline ?? {}, null, 2)}
-        </pre>
-      </div>
+      <AnnualReportSections model={vm} />
     </>
   );
 }
@@ -1225,7 +1243,30 @@ export function PeriodReportNewPage() {
         </div>
       );
     }
-    const draftHrefYear = `/students/${studentId}`;
+    const yearEndYm =
+      searchParams.get("end_ym")?.trim() ||
+      (anchorYm ? yearMonthForRound(anchorYm, 12) : "") ||
+      endYmForAnnualTargetYear(savedYear.target_year) ||
+      "";
+    const draftHrefYear = yearEndYm
+      ? `/students/${studentId}/period/new?type=12m&end_ym=${encodeURIComponent(yearEndYm)}&y_id=${encodeURIComponent(savedYear.y_report_id)}`
+      : `/students/${studentId}`;
+
+    if (draftUrlType === "12m" && yearEndYm && studentId) {
+      return (
+        <AnnualReportComposer
+          studentId={studentId}
+          endYm={yearEndYm}
+          enrollmentAnchorYm={anchorYm}
+          reports={reports}
+          studentNick={currentStudent?.student_nick}
+          studentGrade={currentStudent?.student_grade}
+          savedYear={savedYear}
+          years={years}
+        />
+      );
+    }
+
     return (
       <PeriodSavedViewShell
         studentId={studentId}
@@ -1233,7 +1274,7 @@ export function PeriodReportNewPage() {
         subtitle={`${savedYear.target_year}년 · 발행 ${formatPublishedYmd(savedYear.created_at)}`}
         newDraftHref={draftHrefYear}
       >
-        <YearSavedBody row={savedYear} />
+        <YearSavedBody row={savedYear} anchorYm={anchorYm} />
       </PeriodSavedViewShell>
     );
   }
@@ -1253,18 +1294,7 @@ export function PeriodReportNewPage() {
 
   const isQuarterComposer = !hId && !yId && draftUrlType === "3m";
   const isHalfComposer = !hId && !yId && !qId && draftUrlType === "6m";
-
-  if (!hId && !yId && !qId && draftUrlType === "12m") {
-    return (
-      <div className="mx-auto max-w-4xl space-y-4 p-6">
-        <p className="text-sm font-medium text-slate-800">이 화면은 분기·반기 레포트 작성 전용입니다.</p>
-        <p className="text-sm text-slate-600">연간 레포트는 학생 상세에서 해당 메뉴를 이용해 주세요.</p>
-        <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
-          ← 학생 상세
-        </Link>
-      </div>
-    );
-  }
+  const isAnnualComposer = !hId && !yId && !qId && draftUrlType === "12m";
 
   if (isHalfComposer && !draftEndYm) {
     return (
@@ -1295,6 +1325,40 @@ export function PeriodReportNewPage() {
         enrollmentAnchorYm={anchorYm}
         savedHalf={savedHalfForEdit}
         halves={halves}
+      />
+    );
+  }
+
+  if (isAnnualComposer && !draftEndYm) {
+    return (
+      <div className="mx-auto max-w-4xl space-y-4 p-6">
+        <p className="text-sm font-medium text-slate-800">
+          연간 레포트는 학생 상세의 「연간 레포트 생성하기」 링크로 들어와 주세요.
+        </p>
+        <Link to={`/students/${studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
+          ← 학생 상세
+        </Link>
+      </div>
+    );
+  }
+
+  if (isAnnualComposer && studentsLoading) {
+    return <div className="mx-auto max-w-4xl p-6 text-sm text-slate-600">학생 정보를 불러오는 중…</div>;
+  }
+
+  if (isAnnualComposer && draftEndYm && studentId) {
+    const annualY = annualTargetYearForEndYm(draftEndYm);
+    const savedYearForEdit = years.find((y) => y.target_year === annualY) ?? null;
+    return (
+      <AnnualReportComposer
+        studentId={studentId}
+        endYm={draftEndYm}
+        enrollmentAnchorYm={anchorYm}
+        reports={reports}
+        studentNick={currentStudent?.student_nick}
+        studentGrade={currentStudent?.student_grade}
+        savedYear={savedYearForEdit}
+        years={years}
       />
     );
   }

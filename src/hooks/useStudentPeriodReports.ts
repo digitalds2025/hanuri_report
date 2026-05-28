@@ -60,7 +60,7 @@ export function useStudentPeriodReports(studentId?: string) {
         supabase
           .from("y_reports")
           .select(
-            "y_report_id, target_year, annual_timeline, score_reading, score_thinking, score_discussion, score_writing, score_growth, report ( created_at )",
+            "y_report_id, target_year, annual_timeline, outlook_comment, total_books, lit_ratio, non_lit_ratio, book_lit_count, book_non_lit_count, roadmap_text, teacher_comment, cert_text, cert_grade_label, score_reading, score_thinking, score_discussion, score_writing, score_growth, report ( created_at )",
           )
           .eq("student_id", studentId)
           .order("target_year", { ascending: false }),
@@ -120,6 +120,16 @@ export function useStudentPeriodReports(studentId?: string) {
         y_report_id: String(row.y_report_id),
         target_year: Number(row.target_year),
         annual_timeline: (row.annual_timeline ?? {}) as YearReportRow["annual_timeline"],
+        outlook_comment: (row.outlook_comment as string | null) ?? null,
+        total_books: Number(row.total_books ?? 0),
+        lit_ratio: Number(row.lit_ratio ?? 0),
+        non_lit_ratio: Number(row.non_lit_ratio ?? 0),
+        book_lit_count: Number(row.book_lit_count ?? 0),
+        book_non_lit_count: Number(row.book_non_lit_count ?? 0),
+        roadmap_text: (row.roadmap_text as string | null) ?? null,
+        teacher_comment: (row.teacher_comment as string | null) ?? null,
+        cert_text: (row.cert_text as string | null) ?? null,
+        cert_grade_label: (row.cert_grade_label as string | null) ?? null,
         score_reading: Number(row.score_reading),
         score_thinking: Number(row.score_thinking),
         score_discussion: Number(row.score_discussion),

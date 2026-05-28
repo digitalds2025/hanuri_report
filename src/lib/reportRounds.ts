@@ -149,7 +149,21 @@ export function roundCellStatus(input: {
 export function reportsByYearMonth(reports: MonthlyReport[]): Map<string, MonthlyReport> {
   const m = new Map<string, MonthlyReport>();
   for (const r of reports) {
-    if (!m.has(r.year_month)) m.set(r.year_month, r);
+    const ym = r.year_month;
+    if (!ym) continue;
+    const prev = m.get(ym);
+    if (!prev) {
+      m.set(ym, r);
+      continue;
+    }
+    const prevGm = (prev.growth_moments ?? "").trim();
+    const nextGm = (r.growth_moments ?? "").trim();
+    if (!prevGm && nextGm) {
+      m.set(ym, r);
+      continue;
+    }
+    if (prevGm && !nextGm) continue;
+    if (r.created_at >= prev.created_at) m.set(ym, r);
   }
   return m;
 }

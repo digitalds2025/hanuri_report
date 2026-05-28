@@ -49,6 +49,16 @@ export type YearReportRow = {
   y_report_id: string;
   target_year: number;
   annual_timeline: Json;
+  outlook_comment: string | null;
+  total_books: number;
+  lit_ratio: number;
+  non_lit_ratio: number;
+  book_lit_count: number;
+  book_non_lit_count: number;
+  roadmap_text: string | null;
+  teacher_comment: string | null;
+  cert_text: string | null;
+  cert_grade_label: string | null;
   score_reading: number;
   score_thinking: number;
   score_discussion: number;

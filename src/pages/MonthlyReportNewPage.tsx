@@ -966,26 +966,23 @@ export function MonthlyReportNewPage() {
                         {b.cover_url ? (
                           <img
                             src={b.cover_url}
-                            alt=""
-                            className="h-36 w-[6.5rem] rounded-lg border border-slate-200 object-cover shadow-sm"
+                            alt={b.title ? `${b.title} 표지` : "선택 도서 표지"}
+                            className="h-[10.75rem] w-[6.5rem] rounded-lg border border-slate-200 object-cover shadow-sm"
                           />
                         ) : (
-                          <div className="flex h-36 w-[6.5rem] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white text-center text-[11px] text-slate-500">
+                          <div className="flex h-[10.75rem] w-[6.5rem] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white text-center text-[11px] text-slate-500">
                             표지 없음
                           </div>
                         )}
                         <button
                           type="button"
                           title="선택 해제"
-                          aria-label={`${b.title} 선택 해제`}
+                          aria-label={`${b.title || "도서"} 선택 해제`}
                           onClick={() => removeSelectedBookAt(i)}
                           className="absolute -right-1.5 -top-1.5 flex h-7 w-7 items-center justify-center rounded-full bg-red-600 text-sm font-bold leading-none text-white shadow hover:bg-red-700"
                         >
                           ×
                         </button>
-                        <p className="mt-1 max-w-[6.5rem] truncate text-center text-[11px] text-slate-700" title={b.title}>
-                          {b.title}
-                        </p>
                       </div>
                     ))
                   )}

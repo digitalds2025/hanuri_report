@@ -21,7 +21,6 @@ import { studentsSectionTitle } from "../lib/studentsSectionTitle";
 import {
   annualTargetYearForEndYm,
   enrollmentYearMonth,
-  endYmForAnnualTargetYear,
   endYmForHalfYearCode,
   findQuarterReportForYearMonth,
   halfYearCodeForEndYm,
@@ -720,7 +719,7 @@ export function StudentDetailPage() {
                     {yearSaved ? (
                       <Link
                         role="menuitem"
-                        to={`/students/${id}/period/new?type=12m&end_ym=${encodeURIComponent(endYmForAnnualTargetYear(yearSaved.target_year))}&y_id=${encodeURIComponent(yearSaved.y_report_id)}`}
+                        to={`/students/${id}/period/new?type=12m&end_ym=${encodeURIComponent(ym)}&y_id=${encodeURIComponent(yearSaved.y_report_id)}`}
                         onClick={onNav}
                         className={activeCls}
                       >
