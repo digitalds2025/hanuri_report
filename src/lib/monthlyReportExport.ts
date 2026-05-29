@@ -1,16 +1,11 @@
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
-import { prepareHtml2CanvasClone } from "./html2canvasPrepareClone";
+import { prepareHtml2CanvasClone, withSanitizedStylesForCapture } from "./html2canvasPrepareClone";
 
 export const MONTHLY_REPORT_EXPORT_ROOT_ID = "hanuri-export-root";
 
-const CAPTURE_OPTS: Parameters<typeof html2canvas>[1] = {
-  scale: 2,
-  useCORS: true,
-  allowTaint: false,
-  backgroundColor: "#eaf1f9",
-  logging: false,
-};
+const CAPTURE_SCALE = 2;
+const PDF_MARGIN_MM = 5;
 
 function sanitizeFilenameBase(title: string): string {
   const t = title.trim() || "hanuri-monthly-report";
@@ -34,7 +29,6 @@ async function waitForImages(root: HTMLElement): Promise<void> {
   );
 }
 
-/** 외부 URL 이미지를 data URL로 바꿔 canvas CORS 오류를 줄입니다 (공개 버킷·CORS 허용 URL). */
 async function embedImagesAsDataUrls(root: HTMLElement): Promise<void> {
   const imgs = Array.from(root.querySelectorAll("img"));
   await Promise.all(
@@ -58,7 +52,7 @@ async function embedImagesAsDataUrls(root: HTMLElement): Promise<void> {
           img.src = dataUrl;
         });
       } catch {
-        /* 원본 URL 유지 — 캡처 시 해당 이미지만 비어 있을 수 있음 */
+        /* skip */
       }
     }),
   );
@@ -70,23 +64,63 @@ async function captureRootCanvas(rootId: string): Promise<HTMLCanvasElement> {
     throw new Error(`보낼 영역(#${rootId})을 찾을 수 없습니다.`);
   }
 
-  const imgs = el.querySelectorAll("img");
-  imgs.forEach((img) => {
+  el.scrollIntoView({ block: "start" });
+
+  el.querySelectorAll("img").forEach((img) => {
     if (!img.crossOrigin) img.crossOrigin = "anonymous";
   });
 
   await embedImagesAsDataUrls(el);
   await waitForImages(el);
+  if (document.fonts?.ready) {
+    await document.fonts.ready;
+  }
 
-  return html2canvas(el, {
-    ...CAPTURE_OPTS,
-    onclone: (clonedDoc, clonedElement) => {
-      const source = document.getElementById(rootId);
-      if (source && clonedElement instanceof HTMLElement) {
-        prepareHtml2CanvasClone(clonedDoc, clonedElement, source);
-      }
-    },
+  const sourceEl = el;
+  const viewportW = document.documentElement.clientWidth;
+  const viewportH = document.documentElement.clientHeight;
+
+  await new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
+
+  return withSanitizedStylesForCapture(document, el, async () => {
+    return html2canvas(el, {
+      scale: CAPTURE_SCALE,
+      useCORS: true,
+      allowTaint: false,
+      backgroundColor: "#eaf1f9",
+      logging: false,
+      /** Tailwind lg/md 판정을 화면과 동일하게 */
+      windowWidth: viewportW,
+      windowHeight: viewportH,
+      onclone: (clonedDoc, clonedElement) => {
+        const cloneRoot =
+          clonedElement instanceof HTMLElement
+            ? clonedElement
+            : clonedDoc.getElementById(rootId);
+        prepareHtml2CanvasClone(clonedDoc, sourceEl, cloneRoot instanceof HTMLElement ? cloneRoot : null);
+      },
+    });
+  });
+}
+
+/** 캔버스를 A4 가로·세로 안에 맞춘 mm 크기 (비율 유지) */
+function fitCanvasToA4Mm(canvas: HTMLCanvasElement): { w: number; h: number } {
+  const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const availW = pageW - PDF_MARGIN_MM * 2;
+  const availH = pageH - PDF_MARGIN_MM * 2;
+  const ratio = canvas.width / canvas.height;
+
+  let drawW = availW;
+  let drawH = drawW / ratio;
+  if (drawH > availH) {
+    drawH = availH;
+    drawW = drawH * ratio;
+  }
+  return { w: drawW, h: drawH };
 }
 
 export function downloadDataUrl(dataUrl: string, filename: string): void {
@@ -96,36 +130,23 @@ export function downloadDataUrl(dataUrl: string, filename: string): void {
   a.click();
 }
 
-/** 레포트 미리보기 영역 → JPG */
 export async function downloadMonthlyReportJpg(rootId: string, filenameBase: string): Promise<void> {
   const canvas = await captureRootCanvas(rootId);
   const name = filenameBase.endsWith(".jpg") ? filenameBase : `${filenameBase}.jpg`;
   downloadDataUrl(canvas.toDataURL("image/jpeg", 0.92), name);
 }
 
-/** 레포트 미리보기 영역 → PDF (내용 높이에 맞춰 여러 A4 페이지) */
 export async function downloadMonthlyReportPdf(rootId: string, filenameBase: string): Promise<void> {
   const canvas = await captureRootCanvas(rootId);
   const name = filenameBase.endsWith(".pdf") ? filenameBase : `${filenameBase}.pdf`;
   const imgData = canvas.toDataURL("image/png");
   const pdf = new jsPDF({ orientation: "p", unit: "mm", format: "a4" });
   const pageW = pdf.internal.pageSize.getWidth();
-  const pageH = pdf.internal.pageSize.getHeight();
-  const imgW = pageW;
-  const imgH = (canvas.height * imgW) / canvas.width;
-  let heightLeft = imgH;
-  let position = 0;
+  const { w: drawW, h: drawH } = fitCanvasToA4Mm(canvas);
+  const x = (pageW - drawW) / 2;
+  const y = PDF_MARGIN_MM;
 
-  pdf.addImage(imgData, "PNG", 0, position, imgW, imgH);
-  heightLeft -= pageH;
-
-  while (heightLeft > 0) {
-    position = heightLeft - imgH;
-    pdf.addPage();
-    pdf.addImage(imgData, "PNG", 0, position, imgW, imgH);
-    heightLeft -= pageH;
-  }
-
+  pdf.addImage(imgData, "PNG", x, y, drawW, drawH);
   pdf.save(name);
 }
 

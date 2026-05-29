@@ -1,5 +1,9 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { ReportFinalStepActions } from "../reports/ReportFinalStepActions";
+import { ReportSaveRedirectDialog } from "../reports/ReportSaveRedirectDialog";
+import { useReportFileExport } from "../../hooks/useReportFileExport";
+import { REPORT_HEADER_TITLE_HALF } from "../../lib/reportHeaderTitles";
 import type { MonthlyReport } from "../../lib/types/database";
 import { dateRangeForPeriodEndingInMonth, halfYearCodeForEndYm } from "../../lib/reportRounds";
 import {
@@ -10,8 +14,12 @@ import {
 } from "../../lib/halfYearReportCompute";
 import { resolveHalfYearReadingType } from "../../lib/halfYearReadingTypes";
 import { generateHalfYearCompetencyCopy, expandHalfYearTeacherComment } from "../../lib/geminiHalfYearReport";
+import {
+  clampHalfYearGaugeDesc,
+  clampHalfYearReadingTypeDesc,
+} from "../../lib/halfYearReportCopy";
 import { upsertHalfYearReportDraft } from "../../lib/halfYearReportDraftSync";
-import { pillarLabelsKo, PILLAR_KEYS, type PillarKey } from "../../lib/reportAggregates";
+import { pillarLabelsKo } from "../../lib/reportAggregates";
 import {
   applyReportPrivacy,
   buildReportPrivacyContext,
@@ -50,6 +58,7 @@ export function HalfYearReportComposer({
   savedHalf,
   halves,
 }: Props) {
+  const navigate = useNavigate();
   const effectiveAnchor = enrollmentAnchorYm;
 
   const halfRange = useMemo(() => dateRangeForPeriodEndingInMonth(endYm, "6m"), [endYm]);
@@ -87,15 +96,9 @@ export function HalfYearReportComposer({
 
   const [wizardStep, setWizardStep] = useState(() => (savedHalfForDraft ? 4 : 1));
   const [scoreOverview, setScoreOverview] = useState("");
-  const [pillarDescs, setPillarDescs] = useState<Record<PillarKey, string>>({
-    reading: "",
-    thinking: "",
-    discussion: "",
-    writing: "",
-    growth: "",
-  });
   const [gaugeHighDesc, setGaugeHighDesc] = useState("");
   const [gaugeLowDesc, setGaugeLowDesc] = useState("");
+  const [readingTypeDescription, setReadingTypeDescription] = useState("");
   const [teacherSeed, setTeacherSeed] = useState("");
   const [teacherExpanded, setTeacherExpanded] = useState("");
   const [analysisBusy, setAnalysisBusy] = useState(false);
@@ -103,6 +106,8 @@ export function HalfYearReportComposer({
   const [teacherBusy, setTeacherBusy] = useState(false);
   const [teacherErr, setTeacherErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [reportEditMode, setReportEditMode] = useState(false);
+  const [saveRedirectOpen, setSaveRedirectOpen] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   const hydratedRef = useMemo(() => `${studentId}:${savedHalfForDraft?.h_report_id ?? ""}`, [studentId, savedHalfForDraft]);
@@ -111,15 +116,13 @@ export function HalfYearReportComposer({
     if (!savedHalfForDraft) return;
     const row = savedHalfForDraft;
     setScoreOverview(applyReportPrivacy(row.score_overview ?? "", reportPrivacy));
-    setPillarDescs({
-      reading: applyReportPrivacy(row.score_reading_desc ?? "", reportPrivacy),
-      thinking: applyReportPrivacy(row.score_thinking_desc ?? "", reportPrivacy),
-      discussion: applyReportPrivacy(row.score_discussion_desc ?? "", reportPrivacy),
-      writing: applyReportPrivacy(row.score_writing_desc ?? "", reportPrivacy),
-      growth: applyReportPrivacy(row.score_growth_desc ?? "", reportPrivacy),
-    });
-    setGaugeHighDesc(applyReportPrivacy(row.gauge_high_desc ?? "", reportPrivacy));
-    setGaugeLowDesc(applyReportPrivacy(row.gauge_low_desc ?? "", reportPrivacy));
+    setGaugeHighDesc(
+      clampHalfYearGaugeDesc(applyReportPrivacy(row.gauge_high_desc ?? "", reportPrivacy)),
+    );
+    setGaugeLowDesc(clampHalfYearGaugeDesc(applyReportPrivacy(row.gauge_low_desc ?? "", reportPrivacy)));
+    setReadingTypeDescription(
+      clampHalfYearReadingTypeDesc(applyReportPrivacy(row.type_description ?? "", reportPrivacy)),
+    );
     setTeacherExpanded(applyReportPrivacy(row.teacher_comment ?? "", reportPrivacy));
     setWizardStep(4);
   }, [hydratedRef, savedHalfForDraft, reportPrivacy]);
@@ -133,19 +136,22 @@ export function HalfYearReportComposer({
     return {
       halfLabel,
       scoreOverview,
-      pillarDescs,
       gaugeHighLabel: pillarLabelsKo[high],
       gaugeLowLabel: pillarLabelsKo[low],
       gaugeHighDesc: gaugeHighDesc,
       gaugeLowDesc: gaugeLowDesc,
-      readingType: readingTypeResult.type,
+      readingType: readingTypeResult.type
+        ? {
+            ...readingTypeResult.type,
+            description: readingTypeDescription,
+          }
+        : null,
       teacherComment: teacherExpanded,
       radarAverages: averages,
     };
   }, [
     halfLabel,
     scoreOverview,
-    pillarDescs,
     gaugePillars,
     gaugeHighDesc,
     gaugeLowDesc,
@@ -164,18 +170,22 @@ export function HalfYearReportComposer({
       score_writing: storedScores.writing,
       score_growth: storedScores.growth,
       score_overview: sanitizeReportStudentPii(scoreOverview.trim(), reportPrivacy) || null,
-      score_reading_desc: sanitizeReportStudentPii(pillarDescs.reading.trim(), reportPrivacy) || null,
-      score_thinking_desc: sanitizeReportStudentPii(pillarDescs.thinking.trim(), reportPrivacy) || null,
-      score_discussion_desc: sanitizeReportStudentPii(pillarDescs.discussion.trim(), reportPrivacy) || null,
-      score_writing_desc: sanitizeReportStudentPii(pillarDescs.writing.trim(), reportPrivacy) || null,
-      score_growth_desc: sanitizeReportStudentPii(pillarDescs.growth.trim(), reportPrivacy) || null,
+      score_reading_desc: null,
+      score_thinking_desc: null,
+      score_discussion_desc: null,
+      score_writing_desc: null,
+      score_growth_desc: null,
       gauge_high_pillar: gaugePillars.high,
       gauge_low_pillar: gaugePillars.low,
-      gauge_high_desc: sanitizeReportStudentPii(gaugeHighDesc.trim(), reportPrivacy) || null,
-      gauge_low_desc: sanitizeReportStudentPii(gaugeLowDesc.trim(), reportPrivacy) || null,
+      gauge_high_desc:
+        sanitizeReportStudentPii(clampHalfYearGaugeDesc(gaugeHighDesc), reportPrivacy) || null,
+      gauge_low_desc:
+        sanitizeReportStudentPii(clampHalfYearGaugeDesc(gaugeLowDesc), reportPrivacy) || null,
       reading_type_name: readingTypeResult.type.typeName,
       type_logic_code: readingTypeResult.type.code,
-      type_description: readingTypeResult.type.description,
+      type_description:
+        sanitizeReportStudentPii(clampHalfYearReadingTypeDesc(readingTypeDescription), reportPrivacy) ||
+        null,
       teacher_comment:
         overrides?.teacher_comment !== undefined
           ? overrides.teacher_comment
@@ -186,11 +196,11 @@ export function HalfYearReportComposer({
       endYm,
       storedScores,
       scoreOverview,
-      pillarDescs,
       gaugePillars,
       gaugeHighDesc,
       gaugeLowDesc,
       readingTypeResult,
+      readingTypeDescription,
       teacherExpanded,
       teacherSeed,
       reportPrivacy,
@@ -217,6 +227,7 @@ export function HalfYearReportComposer({
     }
     setAnalysisBusy(true);
     try {
+      const { type: resolvedReadingType } = readingTypeResult;
       const copy = await generateHalfYearCompetencyCopy({
         studentGradeLabel: periodGradeLabel,
         halfLabel,
@@ -224,18 +235,19 @@ export function HalfYearReportComposer({
         averages,
         gaugeHigh: gaugePillars.high,
         gaugeLow: gaugePillars.low,
+        readingTypeName: resolvedReadingType.typeName,
         privacy: reportPrivacy,
       });
       setScoreOverview(applyReportPrivacy(copy.score_overview, reportPrivacy));
-      setPillarDescs({
-        reading: applyReportPrivacy(copy.score_reading_desc, reportPrivacy),
-        thinking: applyReportPrivacy(copy.score_thinking_desc, reportPrivacy),
-        discussion: applyReportPrivacy(copy.score_discussion_desc, reportPrivacy),
-        writing: applyReportPrivacy(copy.score_writing_desc, reportPrivacy),
-        growth: applyReportPrivacy(copy.score_growth_desc, reportPrivacy),
-      });
-      setGaugeHighDesc(applyReportPrivacy(copy.gauge_high_desc, reportPrivacy));
-      setGaugeLowDesc(applyReportPrivacy(copy.gauge_low_desc, reportPrivacy));
+      setGaugeHighDesc(
+        clampHalfYearGaugeDesc(applyReportPrivacy(copy.gauge_high_desc, reportPrivacy)),
+      );
+      setGaugeLowDesc(
+        clampHalfYearGaugeDesc(applyReportPrivacy(copy.gauge_low_desc, reportPrivacy)),
+      );
+      setReadingTypeDescription(
+        clampHalfYearReadingTypeDesc(applyReportPrivacy(copy.reading_type_description, reportPrivacy)),
+      );
       setWizardStep(2);
     } catch (e) {
       setAnalysisErr(e instanceof Error ? e.message : String(e));
@@ -249,6 +261,7 @@ export function HalfYearReportComposer({
     slots,
     averages,
     gaugePillars,
+    readingTypeResult,
     reportPrivacy,
   ]);
 
@@ -296,10 +309,11 @@ export function HalfYearReportComposer({
   ]);
 
   const step1Ok =
-    scoreOverview.trim().length > 0 &&
-    PILLAR_KEYS.every((k) => pillarDescs[k]?.trim()) &&
-    gaugeHighDesc.trim() &&
-    gaugeLowDesc.trim();
+    scoreOverview.trim().length > 0 && Boolean(gaugeHighDesc.trim()) && Boolean(gaugeLowDesc.trim());
+
+  const canExportReport =
+    wizardStep === 4 && step1Ok && Boolean(teacherExpanded.trim()) && !reportEditMode;
+  const { exportBusy, runExport } = useReportFileExport(canExportReport, REPORT_HEADER_TITLE_HALF);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
@@ -323,7 +337,8 @@ export function HalfYearReportComposer({
         return;
       }
       await upsertHalfYearReportDraft(supabase, buildDraftPayload({ teacher_comment: teacherExpanded.trim() }));
-      setMsg("반기 레포트가 저장되었습니다.");
+      setMsg(null);
+      setSaveRedirectOpen(true);
     } catch (err) {
       setMsg(err instanceof Error ? err.message : String(err));
     } finally {
@@ -386,8 +401,8 @@ export function HalfYearReportComposer({
           <fieldset className="space-y-4">
             <legend className="text-sm font-semibold text-slate-800">1. 최근 6개월간의 점수 평균</legend>
             <p className="text-sm text-slate-600">
-              6개월 월간 역량 별점을 평균 내 레이더·게이지용 문구를 생성합니다. 학부모 화면에는 숫자 대신 자연어로
-              표시됩니다.
+              6개월 월간 역량을 바탕으로 레이더·게이지와 함께, <strong>3-4회차·5-6회차 구간별</strong> 성장
+              서술(2문단)만 생성합니다. 역량별 항목 나열은 하지 않습니다.
             </p>
             <div className="overflow-x-auto rounded-lg border border-slate-200">
               <table className="min-w-full text-left text-xs">
@@ -418,28 +433,13 @@ export function HalfYearReportComposer({
             >
               {analysisBusy ? "분석·문구 생성 중…" : "6개월 역량 분석 생성"}
             </button>
-            {step1Ok ? (
-              <div className="rounded-lg border border-emerald-200 bg-emerald-50/80 p-3">
-                <p className="text-sm font-medium text-emerald-900">생성 완료 — 미리보기</p>
-                <div className="mt-3 max-h-[480px] overflow-y-auto">
-                  <HalfYearReportSections model={viewModel} />
-                </div>
-              </div>
-            ) : null}
+            {step1Ok ? <HalfYearReportSections model={viewModel} /> : null}
           </fieldset>
         ) : null}
 
         {wizardStep === 2 ? (
           <fieldset className="space-y-4">
             <legend className="text-sm font-semibold text-slate-800">2. 우리 아이 독서 유형</legend>
-            <p className="text-sm text-slate-600">
-              6개월 평균에서 가장 높은 역량 2개(
-              <strong>{pillarLabelsKo[readingTypeResult.topTwo[0]]}</strong>,{" "}
-              <strong>{pillarLabelsKo[readingTypeResult.topTwo[1]]}</strong>)를 기준으로 유형을 판별했습니다.
-              {!readingTypeResult.matchedStrict ? (
-                <span className="text-amber-700"> (두 역량이 나머지보다 모두 높지 않아 근접 유형으로 매칭했습니다.)</span>
-              ) : null}
-            </p>
             <HalfYearReportSections model={viewModel} />
           </fieldset>
         ) : null}
@@ -472,16 +472,44 @@ export function HalfYearReportComposer({
         {wizardStep === 4 ? (
           <fieldset className="space-y-4">
             <legend className="text-sm font-semibold text-slate-800">4. 레포트 확인 · 저장</legend>
-            <HalfYearReportSections model={viewModel} />
-            <label className="block text-sm text-slate-700">
-              선생님 한마디 (수정 가능)
-              <textarea
-                value={teacherExpanded}
-                onChange={(e) => setTeacherExpanded(e.target.value)}
-                rows={8}
-                className="mt-1 w-full rounded-md border border-slate-200 px-3 py-2 text-sm leading-relaxed"
-              />
-            </label>
+            <HalfYearReportSections
+              model={viewModel}
+              editMode={reportEditMode}
+              onScoreOverviewChange={setScoreOverview}
+              onTeacherCommentChange={setTeacherExpanded}
+              onGaugeHighDescChange={(v) => setGaugeHighDesc(clampHalfYearGaugeDesc(v))}
+              onGaugeLowDescChange={(v) => setGaugeLowDesc(clampHalfYearGaugeDesc(v))}
+              onReadingTypeDescriptionChange={(v) =>
+                setReadingTypeDescription(clampHalfYearReadingTypeDesc(v))
+              }
+            />
+            <ReportFinalStepActions
+              onPrev={() => setWizardStep(3)}
+              onRegenerate={() => void runCompetencyAnalysis()}
+              regenerateBusy={analysisBusy}
+              regenerateDisabled={analysisBusy || !canAnalyze}
+              regenerateLabel="역량 분석 다시 생성"
+              reportEditMode={reportEditMode}
+              onToggleEditMode={() => {
+                setMsg(null);
+                setReportEditMode((v) => !v);
+              }}
+              editDisabled={analysisBusy || Boolean(exportBusy)}
+              exportBusy={exportBusy}
+              exportDisabled={!canExportReport}
+              onExportJpg={() => {
+                void runExport("jpg").then((err) => {
+                  if (err) setMsg(err);
+                });
+              }}
+              onExportPdf={() => {
+                void runExport("pdf").then((err) => {
+                  if (err) setMsg(err);
+                });
+              }}
+              saveLabel="반기 레포트 저장"
+              saving={saving}
+            />
           </fieldset>
         ) : null}
 
@@ -513,21 +541,23 @@ export function HalfYearReportComposer({
               다음 (선생님 한마디)
             </button>
           ) : null}
-          {wizardStep === 4 ? (
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-700 disabled:opacity-50"
-            >
-              {saving ? "저장 중…" : "반기 레포트 저장"}
-            </button>
-          ) : null}
         </div>
 
-        {msg ? (
-          <p className={`text-sm ${msg.includes("저장되었") ? "text-emerald-700" : "text-amber-800"}`}>{msg}</p>
-        ) : null}
+        {msg ? <p className="text-center text-sm text-red-600">{msg}</p> : null}
       </form>
+
+      <ReportSaveRedirectDialog
+        open={saveRedirectOpen}
+        onClose={() => setSaveRedirectOpen(false)}
+        onGoStudentDetail={() => {
+          setSaveRedirectOpen(false);
+          navigate(`/students/${studentId}`, { replace: true });
+        }}
+        onGoStudentsList={() => {
+          setSaveRedirectOpen(false);
+          navigate("/students", { replace: true });
+        }}
+      />
     </div>
   );
 }

@@ -1,16 +1,23 @@
-import { PolygonRadarChart, type RadarDatum } from "../monthly/MonthlyReportResultView";
-import {
-  PILLAR_KEYS,
-  pillarLabelsKo,
-  type PillarKey,
-} from "../../lib/reportAggregates";
+import { PolygonRadarChart, type RadarDatum } from "../reports/PolygonRadarChart";
+import { ReportSection } from "../reports/ReportSection";
+import { ReportShell } from "../reports/ReportShell";
+import { PILLAR_KEYS, pillarLabelsKo, type PillarKey } from "../../lib/reportAggregates";
 import type { HalfYearReadingTypeDef } from "../../lib/halfYearReadingTypes";
+import { REPORT_EDIT_TEXTAREA_CLASS, ReportBodyParagraphs } from "../../lib/reportText";
+import { REPORT_HEADER_TITLE_HALF } from "../../lib/reportHeaderTitles";
+import { REPORT_SECTION_CONTENT_GRID_CLASS } from "../../lib/reportLayout";
+import {
+  HALF_YEAR_GAUGE_DESC_MAX_CHARS,
+  HALF_YEAR_READING_TYPE_DESC_MAX_CHARS,
+} from "../../lib/halfYearReportCopy";
 import { HalfYearGauge } from "./HalfYearGauge";
+
+/** 반기 「최근 6개월간의 점수 평균」 — 레이더·구간 서술 ↔ 게이지 블록 간격 */
+const HALF_YEAR_SCORE_GAUGES_DIVIDER_CLASS = "mt-3 grid w-full grid-cols-1 gap-4 border-t border-gray-100 pt-3 sm:grid-cols-2";
 
 export type HalfYearReportViewModel = {
   halfLabel: string;
   scoreOverview: string;
-  pillarDescs: Record<PillarKey, string>;
   gaugeHighLabel: string;
   gaugeLowLabel: string;
   gaugeHighDesc: string;
@@ -20,103 +27,131 @@ export type HalfYearReportViewModel = {
   radarAverages: Record<PillarKey, number>;
 };
 
-function splitParagraphs(text: string): string[] {
-  const t = text.trim();
-  if (!t) return [];
-  const byBlank = t.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
-  if (byBlank.length > 1) return byBlank;
-  return t.split("\n").map((p) => p.trim()).filter(Boolean);
-}
+type HalfYearReportSectionsProps = {
+  model: HalfYearReportViewModel;
+  editMode?: boolean;
+  onScoreOverviewChange?: (v: string) => void;
+  onTeacherCommentChange?: (v: string) => void;
+  onGaugeHighDescChange?: (v: string) => void;
+  onGaugeLowDescChange?: (v: string) => void;
+  onReadingTypeDescriptionChange?: (v: string) => void;
+};
 
-function sectionHeader(title: string) {
-  return (
-    <div className="rounded-t-lg bg-[#1a3b6b] px-4 py-2.5">
-      <h3 className="text-sm font-bold tracking-wide text-white">{title}</h3>
-    </div>
-  );
-}
-
-export function HalfYearReportSections({ model }: { model: HalfYearReportViewModel }) {
+export function HalfYearReportSections({
+  model,
+  editMode = false,
+  onScoreOverviewChange,
+  onTeacherCommentChange,
+  onGaugeHighDescChange,
+  onGaugeLowDescChange,
+  onReadingTypeDescriptionChange,
+}: HalfYearReportSectionsProps) {
   const radarData: RadarDatum[] = PILLAR_KEYS.map((k) => ({
     subject: pillarLabelsKo[k],
     score: Math.min(100, Math.max(0, (model.radarAverages[k] ?? 0) * 10)),
   }));
 
   return (
-    <div className="space-y-6 overflow-hidden rounded-xl border border-slate-200 bg-[#eef4fb] shadow-sm">
-      <header className="bg-gradient-to-r from-[#1a3b6b] to-[#2a5b9c] px-5 py-4 text-center">
-        <p className="text-xs font-medium text-blue-100">한우리독서토론논술</p>
-        <h2 className="mt-1 text-lg font-bold text-white sm:text-xl">6개월 성장 리포트</h2>
-        <p className="mt-1 text-xs text-blue-100">{model.halfLabel}</p>
-      </header>
-
-      <div className="space-y-4 px-4 pb-4">
-        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          {sectionHeader("1. 최근 6개월간의 점수 평균")}
-          <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-            <div className="flex flex-col items-center justify-center">
-              <PolygonRadarChart data={radarData} />
-              <ul className="mt-3 w-full space-y-1 text-xs text-slate-600">
-                {PILLAR_KEYS.map((k) => (
-                  <li key={k} className="flex gap-2">
-                    <span className="shrink-0 font-medium text-slate-800">{pillarLabelsKo[k]}</span>
-                    <span>{model.pillarDescs[k]?.trim() || "—"}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div className="space-y-3 text-sm leading-relaxed text-slate-800">
-              {splitParagraphs(model.scoreOverview).map((p, i) => (
-                <p key={i}>{p}</p>
-              ))}
-            </div>
+    <ReportShell headerTitle={REPORT_HEADER_TITLE_HALF}>
+      <ReportSection title="최근 6개월간의 점수 평균">
+        <div className={`${REPORT_SECTION_CONTENT_GRID_CLASS} lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]`}>
+          <div className="flex flex-col items-center justify-center">
+            <PolygonRadarChart data={radarData} />
           </div>
-          <div className="grid gap-4 border-t border-slate-100 bg-slate-50/80 px-4 py-4 sm:grid-cols-2">
-            <HalfYearGauge
-              variant="high"
-              label="집중 성취 포인트"
-              description={`${model.gaugeHighLabel} — ${model.gaugeHighDesc}`}
-            />
-            <HalfYearGauge
-              variant="low"
-              label="향후 강화 포인트"
-              description={`${model.gaugeLowLabel} — ${model.gaugeLowDesc}`}
-            />
+          <div>
+            {editMode && onScoreOverviewChange ? (
+              <textarea
+                className={REPORT_EDIT_TEXTAREA_CLASS + " min-h-[200px]"}
+                value={model.scoreOverview}
+                onChange={(e) => onScoreOverviewChange(e.target.value)}
+                aria-label="3-4회차·5-6회차 구간 성장 서술"
+                placeholder={"3-4회차 구간에서는 …\n\n5-6회차 구간에서는 …"}
+              />
+            ) : (
+              <ReportBodyParagraphs text={model.scoreOverview} />
+            )}
           </div>
-        </section>
-
-        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          {sectionHeader("2. 우리 아이 독서 유형")}
-          <div className="grid gap-4 p-4 sm:grid-cols-[minmax(0,200px)_1fr] sm:items-center">
-            <div className="flex justify-center">
-              <div className="rounded-3xl bg-gradient-to-br from-sky-100 to-indigo-100 px-6 py-8 text-center shadow-inner ring-2 ring-sky-200/80">
-                <p className="text-lg font-bold leading-snug text-[#1a3b6b]">
-                  {model.readingType?.typeName ?? "—"}
-                </p>
-              </div>
-            </div>
-            <div className="space-y-2 text-sm leading-relaxed text-slate-800">
-              {model.readingType ? (
-                splitParagraphs(model.readingType.description).map((p, i) => <p key={i}>{p}</p>)
+        </div>
+        <div className={HALF_YEAR_SCORE_GAUGES_DIVIDER_CLASS}>
+          <HalfYearGauge
+            variant="high"
+            label="집중 성취 포인트"
+            description={
+              editMode && onGaugeHighDescChange ? (
+                <textarea
+                  className={REPORT_EDIT_TEXTAREA_CLASS + " min-h-[72px] w-full text-sm"}
+                  value={model.gaugeHighDesc}
+                  maxLength={HALF_YEAR_GAUGE_DESC_MAX_CHARS}
+                  onChange={(e) => onGaugeHighDescChange(e.target.value)}
+                  aria-label="집중 성취 설명"
+                />
               ) : (
-                <p className="text-slate-500">6개월 평균 역량을 바탕으로 유형을 판별합니다.</p>
-              )}
-              {model.readingType ? (
-                <p className="text-xs text-slate-500">{model.readingType.comboLabel}</p>
-              ) : null}
+                `${model.gaugeHighLabel} — ${model.gaugeHighDesc}`
+              )
+            }
+          />
+          <HalfYearGauge
+            variant="low"
+            label="향후 강화 포인트"
+            description={
+              editMode && onGaugeLowDescChange ? (
+                <textarea
+                  className={REPORT_EDIT_TEXTAREA_CLASS + " min-h-[72px] w-full text-sm"}
+                  value={model.gaugeLowDesc}
+                  maxLength={HALF_YEAR_GAUGE_DESC_MAX_CHARS}
+                  onChange={(e) => onGaugeLowDescChange(e.target.value)}
+                  aria-label="향후 강화 설명"
+                />
+              ) : (
+                `${model.gaugeLowLabel} — ${model.gaugeLowDesc}`
+              )
+            }
+          />
+        </div>
+      </ReportSection>
+
+      <ReportSection title="우리 아이 독서 유형">
+        <div className={`${REPORT_SECTION_CONTENT_GRID_CLASS} sm:grid-cols-[minmax(0,200px)_1fr] sm:items-center`}>
+          <div className="flex justify-center">
+            <div
+              data-report-capture-box
+              className="rounded-3xl border-2 border-solid border-[#bae6fd] bg-[#e0f2fe] px-6 py-8 text-center"
+            >
+              <p className="text-lg font-bold leading-snug text-[#1a3b6b]">
+                {model.readingType?.typeName ?? "—"}
+              </p>
             </div>
           </div>
-        </section>
-
-        <section className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          {sectionHeader("3. 선생님의 따뜻한 한마디")}
-          <div className="space-y-3 p-4 text-sm leading-relaxed text-slate-800">
-            {splitParagraphs(model.teacherComment).map((p, i) => (
-              <p key={i}>{p}</p>
-            ))}
+          <div className="text-[15px] leading-relaxed text-gray-700">
+            {model.readingType ? (
+              editMode && onReadingTypeDescriptionChange ? (
+                <textarea
+                  className={REPORT_EDIT_TEXTAREA_CLASS + " min-h-[100px] w-full"}
+                  value={model.readingType.description}
+                  maxLength={HALF_YEAR_READING_TYPE_DESC_MAX_CHARS}
+                  onChange={(e) => onReadingTypeDescriptionChange(e.target.value)}
+                  aria-label="독서 유형 설명"
+                />
+              ) : (
+                <p className="leading-relaxed">{model.readingType.description.trim() || "—"}</p>
+              )
+            ) : null}
           </div>
-        </section>
-      </div>
-    </div>
+        </div>
+      </ReportSection>
+
+      <ReportSection title="선생님의 따뜻한 한마디">
+        {editMode && onTeacherCommentChange ? (
+          <textarea
+            className={REPORT_EDIT_TEXTAREA_CLASS}
+            value={model.teacherComment}
+            onChange={(e) => onTeacherCommentChange(e.target.value)}
+            aria-label="선생님 한마디"
+          />
+        ) : (
+          <ReportBodyParagraphs text={model.teacherComment} />
+        )}
+      </ReportSection>
+    </ReportShell>
   );
 }

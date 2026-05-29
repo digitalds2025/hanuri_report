@@ -1,5 +1,9 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { ReportFinalStepActions } from "../components/reports/ReportFinalStepActions";
+import { ReportSaveRedirectDialog } from "../components/reports/ReportSaveRedirectDialog";
+import { SavedReportExportBar } from "../components/reports/SavedReportExportBar";
+import { useReportFileExport } from "../hooks/useReportFileExport";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 import {
   annualTargetYearForEndYm,
@@ -16,11 +20,14 @@ import {
 } from "../lib/reportRounds";
 import { formatSchoolGradeLabel } from "../lib/schoolGrade";
 import {
+  displayMindmapKnowledgeComment,
   generateQuarterKnowledgeMindmapComment,
-  normalizeQuarterMindmapModelText,
   type QuarterMindmapBookRow,
 } from "../lib/geminiQuarterMindmap";
-import { generateQuarterGrowthInsight } from "../lib/geminiQuarterGrowthInsight";
+import {
+  generateQuarterGrowthInsight,
+  GROWTH_INSIGHT_COMMENT_TARGET_CHARS,
+} from "../lib/geminiQuarterGrowthInsight";
 import { generateQuarterReportFinalize } from "../lib/geminiQuarterReportFinalize";
 import {
   applyReportPrivacy,
@@ -40,8 +47,18 @@ import { buildTimelineSlotDisplay, parseAnnualTimeline } from "../lib/annualRepo
 import { mergeWarmSectionFromSaved } from "../lib/annualWarmSection";
 import { HalfYearReportComposer } from "../components/half/HalfYearReportComposer";
 import { HalfYearReportSections, type HalfYearReportViewModel } from "../components/half/HalfYearReportSections";
-import { ReportSection } from "../components/monthly/MonthlyReportResultView";
+import {
+  QuarterReadingMindmapPreview,
+  type QuarterMindmapBookPreview,
+} from "../components/quarter/QuarterReadingMindmapPreview";
+import { QuarterReportResultView } from "../components/quarter/QuarterReportResultView";
+import {
+  REPORT_HEADER_TITLE_ANNUAL,
+  REPORT_HEADER_TITLE_HALF,
+  REPORT_HEADER_TITLE_QUARTER,
+} from "../lib/reportHeaderTitles";
 import { pillarLabelsKo, PILLAR_KEYS, type PillarKey } from "../lib/reportAggregates";
+import { clampHalfYearReadingTypeDesc } from "../lib/halfYearReportCopy";
 import { HALF_YEAR_READING_TYPES } from "../lib/halfYearReadingTypes";
 
 /** 분기(3m) 작성 마법사 — 월간 작성 페이지와 동일한 단계 UX */
@@ -53,48 +70,7 @@ const QUARTER_WIZARD_STEPS = [
   { id: 5, title: "레포트 확인 · 저장" },
 ] as const;
 
-type QuarterReportEditSection = "bestWriting" | "mindmap" | "growth" | "teacher";
-
-/** 분기 확인(5단계) 편집 UI — MonthlyReportResultView와 동일 패턴 */
-const QUARTER_RESULT_EDIT_TEXTAREA_CLASS =
-  "w-full min-h-[160px] resize-y rounded-md border border-gray-200 bg-white px-3 py-2 text-[15px] leading-relaxed text-gray-800 shadow-inner outline-none focus:border-[#9bbdff] focus:ring-1 focus:ring-[#9bbdff]";
-const quarterResultBtnBase = "rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50";
-const QUARTER_RESULT_BTN_EDIT = `${quarterResultBtnBase} border border-[#1a3b6b]/30 bg-white text-[#1a3b6b] hover:bg-[#eaf1f9]`;
-const QUARTER_RESULT_BTN_PRIMARY = `${quarterResultBtnBase} bg-[#1a3b6b] text-white hover:bg-[#2a5b9c]`;
-const QUARTER_RESULT_BTN_GHOST = `${quarterResultBtnBase} border border-gray-300 bg-white text-gray-700 hover:bg-gray-50`;
-
-function splitQuarterBodyParagraphs(text: string): string[] {
-  const t = text.trim();
-  if (!t) return [];
-  const byBlank = t
-    .split(/\n\s*\n/)
-    .map((p) => p.trim())
-    .filter(Boolean);
-  if (byBlank.length > 1) return byBlank;
-  return t
-    .split("\n")
-    .map((p) => p.trim())
-    .filter(Boolean);
-}
-
 type QuarterWritingPick = { round: number; ym: string; slot: 1 | 2; url: string; mReportId: string };
-
-/** 2단계 미리보기용 — books 일부 컬럼 */
-type QuarterMindmapBookPreview = {
-  id: string;
-  title: string;
-  cover_url: string | null;
-  ai_category: string | null;
-  ai_keywords: Json;
-};
-
-function bookAiKeywordsForPreview(kw: Json): string[] {
-  if (!Array.isArray(kw)) return [];
-  return kw
-    .filter((x): x is string => typeof x === "string")
-    .map((s) => s.trim())
-    .filter(Boolean);
-}
 
 /** m_reports 기반 성장 인사이트 표 — 행 키 */
 type GrowthInsightMReportField = "growth_moment" | "strength_cmt" | "weakness_cmt" | "teacher_comment";
@@ -157,12 +133,6 @@ function formatPublishedYmd(iso: string): string {
   });
 }
 
-function formatQuarterLabelKo(quarterYear: string): string {
-  const m = /^(\d{4})-(\d)Q$/.exec(quarterYear);
-  if (!m) return quarterYear;
-  return `${m[1]}년 제${m[2]}분기`;
-}
-
 /** 분기 mindmap_data(summaryText) — 객체가 아니면 null */
 function parseMindmapRecord(text: string): Record<string, unknown> | null {
   try {
@@ -174,151 +144,19 @@ function parseMindmapRecord(text: string): Record<string, unknown> | null {
   return null;
 }
 
-/** 좌·우 가지별 색 (표지 카드 테두리·연결선·분류 뱃지 톤) */
-const QUARTER_READING_MINDMAP_BRANCHES = [
-  { stroke: "#eab308", border: "border-amber-400", cat: "bg-amber-100 text-amber-900" },
-  { stroke: "#22c55e", border: "border-green-500", cat: "bg-green-100 text-green-900" },
-  { stroke: "#38bdf8", border: "border-sky-400", cat: "bg-sky-100 text-sky-900" },
-  { stroke: "#ec4899", border: "border-pink-500", cat: "bg-pink-100 text-pink-900" },
-  { stroke: "#a855f7", border: "border-purple-500", cat: "bg-purple-100 text-purple-900" },
-  { stroke: "#f97316", border: "border-orange-500", cat: "bg-orange-100 text-orange-900" },
-] as const;
-
-type QuarterMindmapBranch = (typeof QUARTER_READING_MINDMAP_BRANCHES)[number];
-
-const MINDMAP_SVG_PATHS_LEFT = [
-  "M 50 52 Q 34 40 24 24",
-  "M 50 52 Q 32 52 24 52",
-  "M 50 52 Q 34 64 24 80",
-] as const;
-const MINDMAP_SVG_PATHS_RIGHT = [
-  "M 50 52 Q 66 40 76 24",
-  "M 50 52 Q 68 52 76 52",
-  "M 50 52 Q 66 64 76 80",
-] as const;
-
-function QuarterReadingMindmapBookCard(props: { book: QuarterMindmapBookPreview; branch: QuarterMindmapBranch }) {
-  const { book: b, branch } = props;
-  const kws = bookAiKeywordsForPreview(b.ai_keywords).slice(0, 8);
-  return (
-    <div className={`flex min-h-[5.25rem] gap-2 overflow-hidden rounded-xl border-2 bg-white p-2 shadow-md ${branch.border}`}>
-      <div className="h-[4.75rem] w-[3.35rem] shrink-0 overflow-hidden rounded-md bg-slate-100 ring-1 ring-slate-200/80">
-        {b.cover_url?.trim() ? (
-          <img src={b.cover_url.trim()} alt="" className="h-full w-full object-cover" loading="lazy" />
-        ) : (
-          <div className="flex h-full w-full items-center justify-center p-0.5 text-center text-[9px] text-slate-500">표지 없음</div>
-        )}
-      </div>
-      <div className="flex min-w-0 flex-1 flex-col justify-center gap-1 pr-0.5">
-        <p className="line-clamp-2 text-left text-[11px] font-semibold leading-snug text-slate-900 sm:text-xs" title={b.title}>
-          {b.title}
-        </p>
-        {b.ai_category?.trim() ? (
-          <span className={`w-fit max-w-full truncate rounded-full px-2 py-0.5 text-[10px] font-medium ${branch.cat}`}>
-            {b.ai_category.trim()}
-          </span>
-        ) : (
-          <span className="text-[10px] text-slate-400">분류 없음</span>
-        )}
-        {kws.length > 0 ? (
-          <p className="line-clamp-2 text-left text-[9px] leading-snug text-slate-600 sm:text-[10px]" title={kws.join(" · ")}>
-            {kws.join(" · ")}
-          </p>
-        ) : (
-          <span className="text-[9px] text-slate-400">키워드 없음</span>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/** 최대 6권 — 좌 3 / 중앙 허브 / 우 3, SVG 곡선 연결 */
-function QuarterReadingMindmapPreview(props: { books: QuarterMindmapBookPreview[] }) {
-  const slice = props.books.slice(0, 6);
-  const left = slice.slice(0, 3);
-  const right = slice.slice(3, 6);
-  return (
-    <div className="relative mt-3 w-full overflow-x-auto pb-1 pt-0.5">
-      <div className="relative mx-auto min-h-[280px] w-[min(100%,640px)] min-w-[280px] sm:min-h-[300px]">
-        <svg
-          className="pointer-events-none absolute inset-0 h-full w-full"
-          viewBox="0 0 100 100"
-          preserveAspectRatio="none"
-          aria-hidden
-        >
-          {left.map((b, i) =>
-            b ? (
-              <path
-                key={`path-L-${b.id}`}
-                d={MINDMAP_SVG_PATHS_LEFT[i]!}
-                fill="none"
-                stroke={QUARTER_READING_MINDMAP_BRANCHES[i]!.stroke}
-                strokeWidth={0.5}
-                strokeLinecap="round"
-                vectorEffect="non-scaling-stroke"
-              />
-            ) : null,
-          )}
-          {right.map((b, j) =>
-            b ? (
-              <path
-                key={`path-R-${b.id}`}
-                d={MINDMAP_SVG_PATHS_RIGHT[j]!}
-                fill="none"
-                stroke={QUARTER_READING_MINDMAP_BRANCHES[j + 3]!.stroke}
-                strokeWidth={0.5}
-                strokeLinecap="round"
-                vectorEffect="non-scaling-stroke"
-              />
-            ) : null,
-          )}
-        </svg>
-        <div className="relative z-[1] flex flex-row items-center justify-between gap-1.5 py-3 pl-0.5 pr-0.5 sm:gap-3 sm:py-4 sm:pl-1 sm:pr-1">
-          <div className="flex min-w-0 flex-1 flex-col justify-center gap-3 sm:gap-4">
-            {[0, 1, 2].map((slot) => {
-              const b = left[slot];
-              if (!b) return null;
-              const branch = QUARTER_READING_MINDMAP_BRANCHES[slot]!;
-              return <QuarterReadingMindmapBookCard key={b.id} book={b} branch={branch} />;
-            })}
-          </div>
-          <div className="flex w-[4.75rem] shrink-0 flex-col items-center justify-center sm:w-28">
-            <div className="flex h-[5.25rem] w-[5.25rem] flex-col items-center justify-center gap-0.5 rounded-full border-2 border-dashed border-slate-300 bg-white/95 px-1.5 text-center shadow-sm ring-1 ring-slate-100 sm:h-28 sm:w-28 sm:gap-1 sm:px-2">
-              <span className="text-[9px] font-semibold leading-tight text-slate-700 sm:text-[11px]">
-                독서 지식
-                <br />
-                마인드맵
-              </span>
-              <span className="text-base sm:text-lg" aria-hidden>
-                📖
-              </span>
-            </div>
-          </div>
-          <div className="flex min-w-0 flex-1 flex-col justify-center gap-3 sm:gap-4">
-            {[0, 1, 2].map((slot) => {
-              const b = right[slot];
-              if (!b) return null;
-              const branch = QUARTER_READING_MINDMAP_BRANCHES[slot + 3]!;
-              return (
-                <QuarterReadingMindmapBookCard key={b.id} book={b} branch={branch} />
-              );
-            })}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function PeriodSavedViewShell(props: {
   studentId: string;
   title: string;
   subtitle: string;
   newDraftHref: string;
+  exportFilenameBase: string;
   children: ReactNode;
 }) {
+  const { exportBusy, runExport } = useReportFileExport(true, props.exportFilenameBase);
+  const [exportMsg, setExportMsg] = useState<string | null>(null);
+
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    <div className="mx-auto max-w-4xl space-y-6">
       <div>
         <Link to={`/students/${props.studentId}`} className="text-sm text-indigo-600 hover:text-indigo-800">
           ← 학생 상세
@@ -327,9 +165,21 @@ function PeriodSavedViewShell(props: {
         <p className="mt-2 text-sm text-slate-600">{props.subtitle}</p>
       </div>
       <div className="rounded-xl border border-emerald-200 bg-emerald-50/50 px-4 py-3 text-sm text-emerald-950">
-        저장된 레포트입니다. 아래는 읽기 전용 요약입니다.
+        저장된 레포트입니다. 아래는 읽기 전용 요약입니다. JPG·PDF로 내려받을 수 있습니다.
       </div>
-      <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">{props.children}</div>
+      <div className="space-y-4 rounded-xl border border-slate-200 bg-white p-4 shadow-sm sm:p-5">
+        <SavedReportExportBar
+          exportBusy={exportBusy}
+          onExportJpg={() => {
+            void runExport("jpg").then((err) => setExportMsg(err));
+          }}
+          onExportPdf={() => {
+            void runExport("pdf").then((err) => setExportMsg(err));
+          }}
+        />
+        {exportMsg ? <p className="text-center text-sm text-red-600">{exportMsg}</p> : null}
+        {props.children}
+      </div>
       <Link
         to={props.newDraftHref}
         className="inline-flex rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-indigo-700 hover:bg-slate-50"
@@ -347,28 +197,22 @@ function halfReportToViewModel(row: HalfReportRow): HalfYearReportViewModel {
       ? HALF_YEAR_READING_TYPES.find((t) => t.typeName === row.reading_type_name)
       : undefined) ??
     null;
-  const readingType =
-    type ??
-    (row.reading_type_name && row.type_description
+  const savedDesc = clampHalfYearReadingTypeDesc(row.type_description ?? "");
+  const readingType = type
+    ? { ...type, description: savedDesc || clampHalfYearReadingTypeDesc(type.description) }
+    : row.reading_type_name && savedDesc
       ? {
           code: (row.type_logic_code ?? "RT") as "RT",
           pillars: ["reading", "thinking"] as const,
-          comboLabel: row.reading_type_name,
+          comboLabel: "",
           typeName: row.reading_type_name,
-          description: row.type_description,
+          description: savedDesc,
         }
-      : null);
+      : null;
 
   const radarAverages = Object.fromEntries(
     PILLAR_KEYS.map((k) => [k, row[`score_${k}` as keyof HalfReportRow] as number]),
   ) as Record<PillarKey, number>;
-
-  const pillarDescs = Object.fromEntries(
-    PILLAR_KEYS.map((k) => [
-      k,
-      (row[`score_${k}_desc` as keyof HalfReportRow] as string | null) ?? "",
-    ]),
-  ) as Record<PillarKey, string>;
 
   const m = /^(\d{4})-H([12])$/.exec(row.half_year_code);
   const halfLabel = m ? `${m[1]}년 ${m[2] === "1" ? "상반기" : "하반기"}` : row.half_year_code;
@@ -379,7 +223,6 @@ function halfReportToViewModel(row: HalfReportRow): HalfYearReportViewModel {
   return {
     halfLabel,
     scoreOverview: row.score_overview ?? "",
-    pillarDescs,
     gaugeHighLabel: pillarLabelsKo[highKey] ?? highKey,
     gaugeLowLabel: pillarLabelsKo[lowKey] ?? lowKey,
     gaugeHighDesc: row.gauge_high_desc ?? "",
@@ -448,6 +291,7 @@ function YearSavedBody({ row, anchorYm }: { row: YearReportRow; anchorYm: string
 }
 
 export function PeriodReportNewPage() {
+  const navigate = useNavigate();
   const { id: studentId } = useParams<{ id: string }>();
   const [searchParams] = useSearchParams();
   const qId = (searchParams.get("q_id") ?? "").trim();
@@ -508,11 +352,8 @@ export function PeriodReportNewPage() {
   const [growthInsightGenBusy, setGrowthInsightGenBusy] = useState(false);
   const [growthInsightGenErr, setGrowthInsightGenErr] = useState<string | null>(null);
 
-  const [quarterEditSection, setQuarterEditSection] = useState<QuarterReportEditSection | null>(null);
-  const [draftQuarterBestWriting, setDraftQuarterBestWriting] = useState("");
-  const [draftQuarterMindmap, setDraftQuarterMindmap] = useState("");
-  const [draftQuarterGrowthCmt, setDraftQuarterGrowthCmt] = useState("");
-  const [draftQuarterTeacher, setDraftQuarterTeacher] = useState("");
+  const [quarterReportEditMode, setQuarterReportEditMode] = useState(false);
+  const [saveRedirectOpen, setSaveRedirectOpen] = useState(false);
 
   /** `q_id`로 저장본 열 때 마법사 상태에 한 번 주입 */
   const hydratedQuarterViewKeyRef = useRef<string | null>(null);
@@ -619,7 +460,7 @@ export function PeriodReportNewPage() {
     setBestWritingComment(applyReportPrivacy((row.best_writing_cmt ?? "").trim(), reportPrivacy));
     setBestWritingUrl((row.best_writing_url ?? "").trim());
     setQuarterWizardStep(5);
-    setQuarterEditSection(null);
+    setQuarterReportEditMode(false);
     setMsg(null);
   }, [qId, savedQuarter, studentId, reportPrivacy]);
 
@@ -638,7 +479,7 @@ export function PeriodReportNewPage() {
     if (!mindmapRecord) return "";
     const v = mindmapRecord.ai_knowledge_network_comment;
     if (typeof v !== "string") return "";
-    return normalizeQuarterMindmapModelText(v);
+    return displayMindmapKnowledgeComment(v);
   }, [mindmapRecord]);
 
   const mergeMindmapKnowledgeComment = useCallback((next: string) => {
@@ -654,44 +495,6 @@ export function PeriodReportNewPage() {
       }
     });
   }, []);
-
-  const startQuarterResultEdit = useCallback(
-    (section: QuarterReportEditSection) => {
-      if (quarterEditSection && quarterEditSection !== section) {
-        setQuarterEditSection(null);
-      }
-      if (section === "bestWriting") setDraftQuarterBestWriting(bestWritingComment);
-      else if (section === "mindmap") setDraftQuarterMindmap(knowledgeCommentForUi);
-      else if (section === "growth") setDraftQuarterGrowthCmt(roadmapText);
-      else if (section === "teacher") setDraftQuarterTeacher(teacherComment);
-      setQuarterEditSection(section);
-    },
-    [quarterEditSection, bestWritingComment, knowledgeCommentForUi, roadmapText, teacherComment],
-  );
-
-  const cancelQuarterResultEdit = useCallback(() => {
-    setQuarterEditSection(null);
-  }, []);
-
-  const saveQuarterResultBestWriting = useCallback(() => {
-    setBestWritingComment(applyReportPrivacy(draftQuarterBestWriting, reportPrivacy));
-    setQuarterEditSection(null);
-  }, [draftQuarterBestWriting, reportPrivacy]);
-
-  const saveQuarterResultMindmap = useCallback(() => {
-    mergeMindmapKnowledgeComment(applyReportPrivacy(draftQuarterMindmap, reportPrivacy));
-    setQuarterEditSection(null);
-  }, [draftQuarterMindmap, mergeMindmapKnowledgeComment, reportPrivacy]);
-
-  const saveQuarterResultGrowth = useCallback(() => {
-    setRoadmapText(applyReportPrivacy(draftQuarterGrowthCmt, reportPrivacy));
-    setQuarterEditSection(null);
-  }, [draftQuarterGrowthCmt, reportPrivacy]);
-
-  const saveQuarterResultTeacher = useCallback(() => {
-    setTeacherComment(applyReportPrivacy(draftQuarterTeacher, reportPrivacy));
-    setQuarterEditSection(null);
-  }, [draftQuarterTeacher, reportPrivacy]);
 
   const insightsJsonOk = useMemo(() => {
     try {
@@ -762,7 +565,7 @@ export function PeriodReportNewPage() {
   }, [draftEndYm]);
 
   useEffect(() => {
-    if (quarterWizardStep !== 5) setQuarterEditSection(null);
+    if (quarterWizardStep !== 5) setQuarterReportEditMode(false);
   }, [quarterWizardStep]);
 
   useEffect(() => {
@@ -931,12 +734,15 @@ export function PeriodReportNewPage() {
     return base as Json;
   }, [summaryText, bestWritingComment]);
 
-  const quarterReportHeaderTitle = useMemo(() => {
-    const nick = (currentStudent?.student_nick ?? "").trim();
-    const qLabel = quarterYearLabel ? formatQuarterLabelKo(quarterYearLabel) : "분기";
-    if (nick) return `${nick} 학생 · ${qLabel} 리포트`;
-    return `${qLabel} 리포트`;
-  }, [currentStudent, quarterYearLabel]);
+  const quarterExportReady =
+    quarterWizardStep === 5 &&
+    Boolean(teacherComment.trim()) &&
+    !quarterReportEditMode &&
+    !quarterFinalizeBusy;
+  const { exportBusy: quarterExportBusy, runExport: runQuarterExport } = useReportFileExport(
+    quarterExportReady,
+    REPORT_HEADER_TITLE_QUARTER,
+  );
 
   const runQuarterReportFinalize = useCallback(async () => {
     setQuarterFinalizeErr(null);
@@ -967,6 +773,12 @@ export function PeriodReportNewPage() {
         teacherSeedMessage: seed,
         privacy: reportPrivacy,
       });
+      if (!res.bestWritingComment.trim()) {
+        setQuarterFinalizeErr(
+          "Best 글쓰기 소개가 생성되지 않았습니다. 잠시 후 「레포트 생성」을 다시 눌러 주세요.",
+        );
+        return;
+      }
       setBestWritingComment(res.bestWritingComment);
       setTeacherComment(res.teacherExpanded);
       setQuarterWizardStep(5);
@@ -1143,7 +955,8 @@ export function PeriodReportNewPage() {
           setMsg(upErr instanceof Error ? upErr.message : String(upErr));
           return;
         }
-        setMsg("분기(쿼터) 리포트가 저장되었습니다.");
+        setMsg(null);
+        setSaveRedirectOpen(true);
         return;
       }
 
@@ -1226,6 +1039,7 @@ export function PeriodReportNewPage() {
         title="반기 레포트 (저장본)"
         subtitle={`${savedHalf.half_year_code} · 발행 ${formatPublishedYmd(savedHalf.created_at)}`}
         newDraftHref={draftHrefHalf}
+        exportFilenameBase={REPORT_HEADER_TITLE_HALF}
       >
         <HalfSavedBody row={savedHalf} />
       </PeriodSavedViewShell>
@@ -1273,6 +1087,7 @@ export function PeriodReportNewPage() {
         title="연간 레포트 (저장본)"
         subtitle={`${savedYear.target_year}년 · 발행 ${formatPublishedYmd(savedYear.created_at)}`}
         newDraftHref={draftHrefYear}
+        exportFilenameBase={REPORT_HEADER_TITLE_ANNUAL}
       >
         <YearSavedBody row={savedYear} anchorYm={anchorYm} />
       </PeriodSavedViewShell>
@@ -1763,10 +1578,11 @@ export function PeriodReportNewPage() {
                     <label className="block text-sm font-medium text-slate-800">
                       긍정적 행동 패턴에 대한 코멘트
                       <textarea
-                        className="mt-1 min-h-[200px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900"
+                        className="mt-1 min-h-[88px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-900"
                         value={roadmapText}
+                        maxLength={GROWTH_INSIGHT_COMMENT_TARGET_CHARS}
                         onChange={(e) => setRoadmapText(e.target.value)}
-                        placeholder="아이가 반복적으로 보여 준 태도를 바탕으로, 학부모에게 전하는 한 덩어리의 메시지를 적어 주세요."
+                        placeholder={`아이가 반복적으로 보여 준 태도를 바탕으로, 학부모에게 전하는 메시지 (${GROWTH_INSIGHT_COMMENT_TARGET_CHARS}자 이내)`}
                         spellCheck
                       />
                     </label>
@@ -1834,257 +1650,74 @@ export function PeriodReportNewPage() {
 
             {quarterWizardStep === 5 ? (
               <div className="space-y-4">
-                <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 px-3 py-2 text-sm text-emerald-900">
-                  {qId ? (
-                    <>
-                      아래는 <strong>저장된 분기 레포트</strong>와 동일한 화면입니다. 각 블록은 <strong>수정</strong>을 누른 뒤 내용을 고치고{" "}
-                      <strong>저장</strong> 또는 <strong>취소</strong>하면 됩니다(월간 레포트 확인 화면과 동일). 다듬은 뒤{" "}
-                      <strong>분기 리포트 저장</strong>을 눌러 변경 사항을 반영하세요.
-                    </>
-                  ) : (
-                    <>
-                      아래는 저장될 분기 레포트 <strong>목차</strong>와 동일합니다. 각 블록은 <strong>수정</strong>을 누른 뒤 내용을 고치고{" "}
-                      <strong>저장</strong> 또는 <strong>취소</strong>하면 됩니다(월간 레포트 확인 화면과 동일). 다듬은 뒤{" "}
-                      <strong>분기 리포트 저장</strong>을 눌러 주세요.
-                    </>
-                  )}
-                </div>
+                <QuarterReportResultView
+                  headerTitle={REPORT_HEADER_TITLE_QUARTER}
+                  editMode={quarterReportEditMode}
+                  bestWritingUrl={bestWritingUrl}
+                  bestWritingComment={bestWritingComment}
+                  onBestWritingCommentChange={(v) =>
+                    setBestWritingComment(applyReportPrivacy(v, reportPrivacy))
+                  }
+                  mindmapPreview={
+                    orderedQuarterMindmapBooks.length > 0 ? (
+                      <QuarterReadingMindmapPreview books={orderedQuarterMindmapBooks} layout="report" />
+                    ) : null
+                  }
+                  knowledgeComment={knowledgeCommentForUi}
+                  onKnowledgeCommentChange={(v) =>
+                    mergeMindmapKnowledgeComment(applyReportPrivacy(v, reportPrivacy))
+                  }
+                  insightTags={[...parseInsightTagsTriple(insightsText)]}
+                  roadmapText={roadmapText}
+                  onRoadmapTextChange={(v) => setRoadmapText(applyReportPrivacy(v, reportPrivacy))}
+                  teacherComment={teacherComment}
+                  onTeacherCommentChange={(v) => setTeacherComment(applyReportPrivacy(v, reportPrivacy))}
+                />
 
-                <div id="hanuri-export-root" className="rounded-xl bg-[#eaf1f9] py-6 font-sans shadow-sm ring-1 ring-slate-200/60">
-                  <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8">
-                    <div className="relative mb-8 overflow-hidden rounded-t-xl bg-gradient-to-r from-[#d9e8fb] to-[#c2dcf9] px-6 pt-10 pb-8 sm:px-8">
-                      <div className="absolute top-0 right-0 h-64 w-64 translate-x-1/3 -translate-y-1/2 rounded-full bg-white/30 blur-3xl" />
-                      <p className="relative z-10 text-sm font-medium text-[#2a5b9c]/90">
-                        {quarterYearLabel ? formatQuarterLabelKo(quarterYearLabel) : ""}
-                        {quarterRange ? ` · ${quarterRange.start} ~ ${quarterRange.end}` : ""}
-                      </p>
-                      <h2 className="relative z-10 mt-2 text-2xl font-extrabold tracking-tight text-[#2a5b9c] md:text-3xl">
-                        {quarterReportHeaderTitle}
-                      </h2>
-                    </div>
-
-                    <ReportSection
-                      title="3개월 Best 글쓰기"
-                      headerRight={
-                        quarterEditSection === "bestWriting" ? (
-                          <>
-                            <button type="button" className={QUARTER_RESULT_BTN_PRIMARY} onClick={saveQuarterResultBestWriting}>
-                              저장
-                            </button>
-                            <button type="button" className={QUARTER_RESULT_BTN_GHOST} onClick={cancelQuarterResultEdit}>
-                              취소
-                            </button>
-                          </>
-                        ) : (
-                          <button type="button" className={QUARTER_RESULT_BTN_EDIT} onClick={() => startQuarterResultEdit("bestWriting")}>
-                            수정
-                          </button>
-                        )
-                      }
-                    >
-                      <div className="space-y-4 text-gray-700">
-                        {bestWritingUrl.trim() ? (
-                          <div className="flex justify-center">
-                            <div className="w-full max-w-sm border border-gray-100 bg-gray-50 p-2 shadow-sm">
-                              <img
-                                src={bestWritingUrl.trim()}
-                                alt="분기 대표 글쓰기"
-                                className="h-auto w-full object-contain"
-                              />
-                            </div>
-                          </div>
-                        ) : (
-                          <p className="text-center text-sm text-gray-500">선정된 글쓰기 이미지가 없습니다.</p>
-                        )}
-                        {quarterEditSection === "bestWriting" ? (
-                          <textarea
-                            className={`${QUARTER_RESULT_EDIT_TEXTAREA_CLASS} min-h-[88px]`}
-                            value={draftQuarterBestWriting}
-                            onChange={(e) => setDraftQuarterBestWriting(e.target.value)}
-                            placeholder="최근 3개월 글쓰기 중 Best 작품을 소개하는 짧은 문장을 적어 주세요."
-                            aria-label="Best 글 소개 문구 편집"
-                            spellCheck
-                          />
-                        ) : splitQuarterBodyParagraphs(bestWritingComment).length > 0 ? (
-                          <div className="space-y-2">
-                            {splitQuarterBodyParagraphs(bestWritingComment).map((p, i) => (
-                              <p key={i} className="whitespace-pre-line text-[15px] leading-relaxed">
-                                {p}
-                              </p>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-gray-500">Best 글 소개 문구가 비어 있습니다. 4단계에서 레포트 생성하기를 실행하거나 수정으로 입력해 주세요.</p>
-                        )}
-                      </div>
-                    </ReportSection>
-
-                    <ReportSection
-                      title="지식 마인드맵"
-                      headerRight={
-                        quarterEditSection === "mindmap" ? (
-                          <>
-                            <button type="button" className={QUARTER_RESULT_BTN_PRIMARY} onClick={saveQuarterResultMindmap}>
-                              저장
-                            </button>
-                            <button type="button" className={QUARTER_RESULT_BTN_GHOST} onClick={cancelQuarterResultEdit}>
-                              취소
-                            </button>
-                          </>
-                        ) : (
-                          <button type="button" className={QUARTER_RESULT_BTN_EDIT} onClick={() => startQuarterResultEdit("mindmap")}>
-                            수정
-                          </button>
-                        )
-                      }
-                    >
-                      <div className="space-y-4 text-gray-700">
-                        {orderedQuarterMindmapBooks.length > 0 ? (
-                          <QuarterReadingMindmapPreview books={orderedQuarterMindmapBooks} />
-                        ) : (
-                          <p className="text-sm text-gray-500">이번 분기 월간에 연결된 도서가 없습니다.</p>
-                        )}
-                        {quarterEditSection === "mindmap" ? (
-                          <textarea
-                            className={`${QUARTER_RESULT_EDIT_TEXTAREA_CLASS} min-h-[120px]`}
-                            value={draftQuarterMindmap}
-                            onChange={(e) => setDraftQuarterMindmap(e.target.value)}
-                            placeholder="지식·수업 타당성 코멘트(mindmap_cmt)"
-                            aria-label="지식·수업 타당성 코멘트 편집"
-                            spellCheck
-                          />
-                        ) : knowledgeCommentForUi.trim() ? (
-                          <div className="space-y-3">
-                            {splitQuarterBodyParagraphs(knowledgeCommentForUi).map((p, i) => (
-                              <p key={i} className="whitespace-pre-wrap text-[15px] leading-relaxed">
-                                {p}
-                              </p>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-gray-500">지식·수업 타당성 코멘트가 비어 있습니다. 수정으로 입력하거나 이전 단계에서 생성해 주세요.</p>
-                        )}
-                      </div>
-                    </ReportSection>
-
-                    <ReportSection
-                      title="성장 인사이트"
-                      headerRight={
-                        quarterEditSection === "growth" ? (
-                          <>
-                            <button type="button" className={QUARTER_RESULT_BTN_PRIMARY} onClick={saveQuarterResultGrowth}>
-                              저장
-                            </button>
-                            <button type="button" className={QUARTER_RESULT_BTN_GHOST} onClick={cancelQuarterResultEdit}>
-                              취소
-                            </button>
-                          </>
-                        ) : (
-                          <button type="button" className={QUARTER_RESULT_BTN_EDIT} onClick={() => startQuarterResultEdit("growth")}>
-                            수정
-                          </button>
-                        )
-                      }
-                    >
-                      <div className="space-y-4 text-gray-700">
-                        <div className="flex flex-wrap gap-2">
-                          {parseInsightTagsTriple(insightsText).map((t, i) =>
-                            t.trim() ? (
-                              <span
-                                key={i}
-                                className="rounded-lg bg-[#1e4d7b] px-2.5 py-1.5 text-sm font-medium text-white shadow-sm"
-                              >
-                                {t.trim()}
-                              </span>
-                            ) : null,
-                          )}
-                        </div>
-                        <p className="text-xs text-gray-500">키워드는 저장 시 growth_keywords·insight_tags에 동기화됩니다. 키워드 변경은 3단계에서 할 수 있습니다.</p>
-                        {quarterEditSection === "growth" ? (
-                          <textarea
-                            className={`${QUARTER_RESULT_EDIT_TEXTAREA_CLASS} min-h-[120px]`}
-                            value={draftQuarterGrowthCmt}
-                            onChange={(e) => setDraftQuarterGrowthCmt(e.target.value)}
-                            placeholder="긍정적 행동 패턴에 대한 코멘트(growth_cmt)"
-                            aria-label="성장 인사이트 코멘트 편집"
-                            spellCheck
-                          />
-                        ) : splitQuarterBodyParagraphs(roadmapText).length > 0 ? (
-                          <div className="space-y-3">
-                            {splitQuarterBodyParagraphs(roadmapText).map((p, i) => (
-                              <p key={i} className="whitespace-pre-wrap text-[15px] leading-relaxed">
-                                {p}
-                              </p>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-gray-500">긍정적 행동 패턴 코멘트가 비어 있습니다.</p>
-                        )}
-                      </div>
-                    </ReportSection>
-
-                    <ReportSection
-                      title="선생님의 따뜻한 한마디"
-                      headerRight={
-                        quarterEditSection === "teacher" ? (
-                          <>
-                            <button type="button" className={QUARTER_RESULT_BTN_PRIMARY} onClick={saveQuarterResultTeacher}>
-                              저장
-                            </button>
-                            <button type="button" className={QUARTER_RESULT_BTN_GHOST} onClick={cancelQuarterResultEdit}>
-                              취소
-                            </button>
-                          </>
-                        ) : (
-                          <button type="button" className={QUARTER_RESULT_BTN_EDIT} onClick={() => startQuarterResultEdit("teacher")}>
-                            수정
-                          </button>
-                        )
-                      }
-                    >
-                      <div className="space-y-2 text-gray-700">
-                        {quarterEditSection === "teacher" ? (
-                          <textarea
-                            className={`${QUARTER_RESULT_EDIT_TEXTAREA_CLASS} min-h-[160px]`}
-                            value={draftQuarterTeacher}
-                            onChange={(e) => setDraftQuarterTeacher(e.target.value)}
-                            placeholder="선생님의 따뜻한 한마디(확장본, teacher_ai_comment)"
-                            aria-label="선생님 한마디 편집"
-                            spellCheck
-                          />
-                        ) : splitQuarterBodyParagraphs(teacherComment).length > 0 ? (
-                          <div className="space-y-4 font-medium text-gray-700">
-                            {splitQuarterBodyParagraphs(teacherComment).map((p, i) => (
-                              <p key={i} className="leading-loose whitespace-pre-line">
-                                {p}
-                              </p>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-gray-500">선생님 한마디(확장본)가 비어 있습니다.</p>
-                        )}
-                      </div>
-                    </ReportSection>
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button type="button" onClick={goQuarterPrev} className="rounded-lg border border-slate-300 px-4 py-2 text-sm">
-                    이전 단계로
-                  </button>
-                </div>
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="w-full rounded-lg bg-indigo-600 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-60"
-                >
-                  {saving ? "저장 중…" : "분기 리포트 저장"}
-                </button>
+                <ReportFinalStepActions
+                  onPrev={goQuarterPrev}
+                  onRegenerate={() => void runQuarterReportFinalize()}
+                  regenerateBusy={quarterFinalizeBusy}
+                  regenerateDisabled={quarterFinalizeBusy || !teacherCommentSeed.trim()}
+                  reportEditMode={quarterReportEditMode}
+                  onToggleEditMode={() => {
+                    setMsg(null);
+                    setQuarterReportEditMode((v) => !v);
+                  }}
+                  editDisabled={quarterFinalizeBusy || Boolean(quarterExportBusy)}
+                  exportBusy={quarterExportBusy}
+                  exportDisabled={!quarterExportReady}
+                  onExportJpg={() => {
+                    void runQuarterExport("jpg").then((err) => {
+                      if (err) setMsg(err);
+                    });
+                  }}
+                  onExportPdf={() => {
+                    void runQuarterExport("pdf").then((err) => {
+                      if (err) setMsg(err);
+                    });
+                  }}
+                  saveLabel="분기 리포트 저장"
+                  saving={saving}
+                />
               </div>
             ) : null}
 
-        {msg ? <p className="text-center text-sm text-slate-700">{msg}</p> : null}
+        {msg ? <p className="text-center text-sm text-red-600">{msg}</p> : null}
       </form>
+
+      <ReportSaveRedirectDialog
+        open={saveRedirectOpen}
+        onClose={() => setSaveRedirectOpen(false)}
+        onGoStudentDetail={() => {
+          setSaveRedirectOpen(false);
+          if (studentId) navigate(`/students/${studentId}`, { replace: true });
+        }}
+        onGoStudentsList={() => {
+          setSaveRedirectOpen(false);
+          navigate("/students", { replace: true });
+        }}
+      />
     </div>
   );
 }

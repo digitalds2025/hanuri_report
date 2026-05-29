@@ -5,7 +5,8 @@ import {
   type ReportPrivacyContext,
 } from "./reportStudentPrivacy";
 
-const GROWTH_INSIGHT_COMMENT_TARGET_CHARS = 420;
+/** 분기 성장 인사이트 긍정 패턴 코멘트 — 프롬프트 목표 상한 */
+export const GROWTH_INSIGHT_COMMENT_TARGET_CHARS = 150;
 const DISTINCT_KEYWORD_FALLBACKS = [
   "호기심",
   "꾸준한 참여",
@@ -142,7 +143,7 @@ function normalizeGrowthInsightComment(raw: string): string {
 /** 문장이 마침표·느낌표 등으로 끝났는지 */
 function isGrowthCommentComplete(text: string): boolean {
   const t = text.trim();
-  if (t.length < 100) return false;
+  if (t.length < 36) return false;
   return /[.!?。]["'」』\s]*$/.test(t);
 }
 
@@ -320,9 +321,9 @@ ${sourcesBlock(sources)}
 위 기록과 키워드를 바탕으로, 학부모에게 전하는 **긍정적 행동 패턴** 코멘트를 **순수 한국어 본문**으로 작성하세요.
 
 - JSON·마크다운·목록·코드 금지
-- **2~3문단**, 문단 사이 빈 줄 1줄
-- **한글 ${target}자 전후**(${target - 50}~${target + 50}자) — 분량을 맞추되 **마지막 문장은 반드시 마침표(.)로 끝낼 것**
-- 중간에 끊기거나 미완성 어미(…하, …되, …발 등)로 끝내지 마세요
+- **1~2문단**, 필요 시 문단 사이 빈 줄 1줄
+- 처음부터 **${target}자 이내**(공백 포함)로 **완결된 글**만 쓰세요. 길어지면 문장을 줄이고, 중간에서 끊기지 마세요
+- **마지막 문장은 반드시 마침표(.)로 끝낼 것**
 - 비난·낙인·과장 금지. 아이는 「우리 아이」 등으로만 지칭
 - JSON·ASCII 큰따옴표(") 사용 금지. 인용은 『』만 사용`;
 
@@ -382,12 +383,11 @@ export async function generateQuarterGrowthInsight(input: {
     tri,
   );
 
-  if (comment.trim().length < 40) {
-    comment = [
-      `이번 분기 우리 아이는 ${tri.join(", ")}의 모습을 반복적으로 보여 주었습니다.`,
-      "선생님이 남긴 월간 기록을 종합해 보면, 활동과 태도 속에서 긍정적인 패턴이 이어지고 있음을 알 수 있습니다.",
-      "가정에서도 오늘 하루 중 기억에 남는 순간 하나를 함께 이야기 나누어 주시면, 아이의 성장을 더 또렷이 느끼실 수 있을 것입니다.",
-    ].join("\n\n");
+  if (!isGrowthCommentComplete(comment)) {
+    const kw = tri.filter(Boolean).join(", ");
+    comment = kw
+      ? `이번 분기 우리 아이는 ${kw}의 모습을 꾸준히 보여 주었습니다. 앞으로도 이 태도가 이어지길 응원합니다.`
+      : "이번 분기 우리 아이는 교실에서 꾸준히 성장하는 모습을 보여 주었습니다. 앞으로도 따뜻한 격려를 이어 가겠습니다.";
   }
 
   return {

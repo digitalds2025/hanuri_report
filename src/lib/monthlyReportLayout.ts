@@ -1,17 +1,30 @@
-import type { CSSProperties } from "react";
-
-/**
- * 월간 레포트 목차 본문 래퍼(흰 박스·글쓰기/도서 이미지 프레임) 안쪽 패딩(px).
- * 네 방향 동일 — 이 값만 바꾸면 MonthlyReportResultView 전체에 반영됩니다.
- */
-export const MONTHLY_REPORT_SECTION_PADDING_PX = 20;
-
-/** 인라인 padding (Tailwind purge와 무관하게 항상 적용) */
-export function monthlyReportSectionPaddingStyle(): CSSProperties {
-  const p = MONTHLY_REPORT_SECTION_PADDING_PX;
-  return { padding: `${p}px` };
-}
-
-/** 월간 레포트·3단계 도서 선택과 동일한 표지 비율 (고해상도 Storage URL도 이 크기로만 표시) */
-export const MONTHLY_REPORT_BOOK_COVER_IMG_CLASS =
-  "mx-auto h-[10.75rem] w-[6.5rem] shrink-0 object-cover object-center";
+export {
+  REPORT_LAYOUT,
+  REPORT_SECTION_SPACING,
+  getReportLayout,
+  getReportSectionSpacing,
+  type ReportLayoutTokens,
+  type ReportSectionSpacing,
+  REPORT_A4_WIDTH_PX,
+  REPORT_ROOT_CLASS,
+  REPORT_INNER_CLASS,
+  REPORT_SECTION_PADDING_PX,
+  reportSectionPaddingStyle,
+  REPORT_BOOK_COVER_IMG_CLASS,
+  REPORT_HEADER_CLASS,
+  REPORT_HEADER_TITLE_CLASS,
+  REPORT_HEADER_SUBTITLE_CLASS,
+  REPORT_SECTION_BLOCK_CLASS,
+  REPORT_SECTION_RIBBON_WRAP_CLASS,
+  REPORT_SECTION_CONTENT_CLASS,
+  REPORT_SECTION_PANEL_CLASS,
+  REPORT_TWO_COLUMN_GRID_CLASS,
+  REPORT_PAIRED_PANELS_GRID_CLASS,
+  REPORT_SECTION_CONTENT_GRID_CLASS,
+  MONTHLY_REPORT_A4_WIDTH_PX,
+  MONTHLY_REPORT_ROOT_CLASS,
+  MONTHLY_REPORT_INNER_CLASS,
+  MONTHLY_REPORT_SECTION_PADDING_PX,
+  monthlyReportSectionPaddingStyle,
+  MONTHLY_REPORT_BOOK_COVER_IMG_CLASS,
+} from "./reportLayout";

@@ -1,5 +1,10 @@
 import { type FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
+import { ReportFinalStepActions } from "../reports/ReportFinalStepActions";
+import { ReportSaveRedirectDialog } from "../reports/ReportSaveRedirectDialog";
+import { useReportFileExport } from "../../hooks/useReportFileExport";
+import { clampAnnualOutlook } from "../../lib/annualReportCopy";
+import { REPORT_HEADER_TITLE_ANNUAL } from "../../lib/reportHeaderTitles";
 import type { MonthlyReport } from "../../lib/types/database";
 import { annualTargetYearForEndYm } from "../../lib/reportRounds";
 import {
@@ -43,9 +48,8 @@ import {
 
 const ANNUAL_WIZARD_STEPS = [
   { id: 1, title: "연간 타임라인" },
-  { id: 2, title: "도서 데이터" },
-  { id: 3, title: "선생님의 따뜻한 한마디" },
-  { id: 4, title: "레포트 확인 · 저장" },
+  { id: 2, title: "선생님의 따뜻한 한마디" },
+  { id: 3, title: "레포트 확인 · 저장" },
 ] as const;
 
 type Props = {
@@ -75,6 +79,7 @@ export function AnnualReportComposer({
   savedYear,
   years,
 }: Props) {
+  const navigate = useNavigate();
   const targetYear = useMemo(() => annualTargetYearForEndYm(endYm), [endYm]);
   const yearLabel = `${targetYear}년`;
 
@@ -110,16 +115,17 @@ export function AnnualReportComposer({
     return years.find((y) => y.target_year === targetYear) ?? null;
   }, [savedYear, years, targetYear]);
 
-  const [wizardStep, setWizardStep] = useState(() => (savedYearForDraft ? 4 : 1));
+  const [wizardStep, setWizardStep] = useState(() => (savedYearForDraft ? 3 : 1));
   const [timelineMonths, setTimelineMonths] = useState<Record<number, string>>(() => {
     const parsed = parseAnnualTimeline(savedYearForDraft?.annual_timeline);
     return timelineMonthsFromJson(parsed.months);
   });
-  const [outlook, setOutlook] = useState(
-    () =>
+  const [outlook, setOutlook] = useState(() =>
+    clampAnnualOutlook(
       savedYearForDraft?.outlook_comment?.trim() ||
-      parseAnnualTimeline(savedYearForDraft?.annual_timeline).outlook ||
-      "",
+        parseAnnualTimeline(savedYearForDraft?.annual_timeline).outlook ||
+        "",
+    ),
   );
   const [bookStats, setBookStats] = useState({
     total: savedYearForDraft?.total_books ?? 0,
@@ -139,11 +145,11 @@ export function AnnualReportComposer({
 
   const [timelineBusy, setTimelineBusy] = useState(false);
   const [timelineErr, setTimelineErr] = useState<string | null>(null);
-  const [booksLoading, setBooksLoading] = useState(false);
   const [warmSectionBusy, setWarmSectionBusy] = useState(false);
   const [warmSectionErr, setWarmSectionErr] = useState<string | null>(null);
-  const [certBusy, setCertBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reportEditMode, setReportEditMode] = useState(false);
+  const [saveRedirectOpen, setSaveRedirectOpen] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
 
   const loadBookStats = useCallback(async () => {
@@ -153,7 +159,6 @@ export function AnnualReportComposer({
       return;
     }
     if (!isSupabaseConfigured() || !supabase) return;
-    setBooksLoading(true);
     try {
       const { data, error } = await supabase.from("books").select("id, ai_category").in("id", ids);
       if (error) throw new Error(error.message);
@@ -171,8 +176,6 @@ export function AnnualReportComposer({
       });
     } catch (e) {
       console.warn("[연간 도서 집계]", e);
-    } finally {
-      setBooksLoading(false);
     }
   }, [slots]);
 
@@ -193,7 +196,7 @@ export function AnnualReportComposer({
         end_ym: endYm,
         ...pillarScoresToYReportColumns(storedScores),
         annual_timeline: timelineJson,
-        outlook_comment: outlook.trim() || null,
+        outlook_comment: clampAnnualOutlook(outlook) || null,
         total_books: bookStats.total,
         lit_ratio: bookStats.litRatio,
         non_lit_ratio: bookStats.nonLitRatio,
@@ -264,6 +267,13 @@ export function AnnualReportComposer({
     targetYear,
   ]);
 
+  const canExportReport =
+    wizardStep === 3 &&
+    Boolean(warmSectionText.trim()) &&
+    Boolean(certText.trim()) &&
+    !reportEditMode;
+  const { exportBusy, runExport } = useReportFileExport(canExportReport, REPORT_HEADER_TITLE_ANNUAL);
+
   const runTimelineAi = useCallback(async () => {
     setTimelineErr(null);
     setTimelineBusy(true);
@@ -276,7 +286,7 @@ export function AnnualReportComposer({
       });
       const merged = mergeTimelineWithAi(parseAnnualTimeline(null), ai);
       setTimelineMonths(timelineMonthsFromJson(merged.months));
-      setOutlook(merged.outlook ?? ai.outlook);
+      setOutlook(clampAnnualOutlook(merged.outlook ?? ai.outlook));
       setWizardStep(2);
     } catch (e) {
       setTimelineErr(e instanceof Error ? e.message : String(e));
@@ -294,6 +304,7 @@ export function AnnualReportComposer({
     }
     setWarmSectionBusy(true);
     try {
+      const gradeForCert = certGradeLabel.trim() || periodGradeLabel;
       const [warmSection, cert] = await Promise.all([
         generateAnnualWarmSectionCopy({
           targetYear,
@@ -303,18 +314,17 @@ export function AnnualReportComposer({
           pillarAverages: averages,
           privacy: reportPrivacy,
         }),
-        certText.trim()
-          ? Promise.resolve(certText)
-          : generateAnnualCertText({
-              targetYear,
-              certGradeLabel: certGradeLabel.trim() || periodGradeLabel,
-              teacherHint: seed,
-              privacy: reportPrivacy,
-            }),
+        generateAnnualCertText({
+          targetYear,
+          certGradeLabel: gradeForCert,
+          teacherHint: seed,
+          privacy: reportPrivacy,
+        }),
       ]);
       setWarmSectionText(warmSection);
-      if (!certText.trim()) setCertText(cert);
-      setWizardStep(4);
+      setCertText(cert);
+      if (!certGradeLabel.trim()) setCertGradeLabel(gradeForCert);
+      setWizardStep(3);
       if (isSupabaseConfigured() && supabase) {
         void upsertAnnualReportDraft(
           supabase,
@@ -328,7 +338,6 @@ export function AnnualReportComposer({
     }
   }, [
     teacherSeed,
-    certText,
     targetYear,
     periodGradeLabel,
     transition,
@@ -337,23 +346,6 @@ export function AnnualReportComposer({
     reportPrivacy,
     buildDraftPayload,
   ]);
-
-  const regenerateCert = useCallback(async () => {
-    setCertBusy(true);
-    try {
-      const cert = await generateAnnualCertText({
-        targetYear,
-        certGradeLabel: certGradeLabel.trim() || periodGradeLabel,
-        teacherHint: teacherSeed.trim() || warmSectionText.slice(0, 200),
-        privacy: reportPrivacy,
-      });
-      setCertText(cert);
-    } catch (e) {
-      setWarmSectionErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setCertBusy(false);
-    }
-  }, [targetYear, certGradeLabel, periodGradeLabel, teacherSeed, warmSectionText, reportPrivacy]);
 
   const summarizedMonthCount = useMemo(
     () => Array.from({ length: 12 }, (_, i) => (timelineMonths[i + 1] ?? "").trim()).filter(Boolean).length,
@@ -365,12 +357,12 @@ export function AnnualReportComposer({
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
-    if (wizardStep !== 4) {
+    if (wizardStep !== 3) {
       setMsg("마지막 단계에서만 저장할 수 있습니다.");
       return;
     }
-    if (!warmSectionText.trim()) {
-      setMsg("「선생님의 따뜻한 한마디」본문을 작성해 주세요.");
+    if (!warmSectionText.trim() || !certText.trim()) {
+      setMsg("2단계에서 「따뜻한 한마디, 수료증 생성」을 실행해 주세요.");
       return;
     }
     if (!step1Ok) {
@@ -389,7 +381,8 @@ export function AnnualReportComposer({
         return;
       }
       await upsertAnnualReportDraft(supabase, buildDraftPayload());
-      setMsg("연간 레포트가 저장되었습니다.");
+      setMsg(null);
+      setSaveRedirectOpen(true);
     } catch (err) {
       setMsg(err instanceof Error ? err.message : String(err));
     } finally {
@@ -500,7 +493,7 @@ export function AnnualReportComposer({
                 className="text-sm text-indigo-600 hover:underline"
                 onClick={() => setWizardStep(2)}
               >
-                다음: 도서 데이터 →
+                다음: 선생님의 따뜻한 한마디 →
               </button>
             ) : summarizedMonthCount > 0 && !step1Ok ? (
               <p className="text-sm text-amber-800">12칸 모두 한 줄 요약·전망이 채워져야 다음 단계로 진행할 수 있습니다.</p>
@@ -509,24 +502,12 @@ export function AnnualReportComposer({
         ) : null}
 
         {wizardStep === 2 ? (
-          <fieldset className="space-y-3">
-            <legend className="text-sm font-semibold text-slate-800">2. 도서 데이터</legend>
-            <p className="text-sm text-slate-600">
-              {booksLoading
-                ? "도서 집계 중…"
-                : `총 ${bookStats.total}권 · 문학 ${bookStats.litCount}권(${bookStats.litRatio}%) · 비문학 ${bookStats.nonLitCount}권(${bookStats.nonLitRatio}%)`}
-            </p>
-            <button type="button" className="text-sm text-indigo-600 hover:underline" onClick={() => setWizardStep(3)}>
-              다음: 선생님의 따뜻한 한마디 →
-            </button>
-          </fieldset>
-        ) : null}
-
-        {wizardStep === 3 ? (
           <fieldset className="space-y-4">
-            <legend className="text-sm font-semibold text-slate-800">3. 선생님의 따뜻한 한마디</legend>
+            <legend className="text-sm font-semibold text-slate-800">2. 선생님의 따뜻한 한마디</legend>
             <p className="text-sm text-slate-600">
-              미래 로드맵(다음 학년·한우리 비전)과 따뜻한 한마디가 <strong>한 섹션·한 본문</strong>으로 생성됩니다.
+              1~2줄 초안만 입력하세요. AI가 현재 학년·12개월 역량·다음 학년 교육과정을 반영한{" "}
+              <strong>맞춤 로드맵·따뜻한 한마디(약 300자)</strong>와 <strong>수료증 문구</strong>를 만들고, 바로
+              레포트 확인·저장 단계로 이동합니다.
               {transition ? (
                 <>
                   {" "}
@@ -537,91 +518,84 @@ export function AnnualReportComposer({
             <label className="block text-sm text-slate-700">
               선생님 초안 (필수, 1~2줄)
               <textarea
-                className="mt-1 w-full min-h-[80px] rounded-md border border-gray-200 px-3 py-2 text-sm"
+                className="mt-1 w-full min-h-[100px] rounded-md border border-gray-200 px-3 py-2 text-sm"
                 value={teacherSeed}
                 onChange={(e) => setTeacherSeed(e.target.value)}
+                placeholder="예: 1년 내내 성실히 참여하며, 토론·글쓰기에서 자신감이 눈에 띄게 자랐습니다."
+                rows={4}
               />
             </label>
-            <label className="block text-sm text-slate-700">
-              섹션 본문 (로드맵 + 한마디 통합 — 직접 수정 가능)
-              <textarea
-                className="mt-1 w-full min-h-[240px] rounded-md border border-gray-200 px-3 py-2 text-sm leading-relaxed"
-                value={warmSectionText}
-                onChange={(e) => setWarmSectionText(e.target.value)}
-                placeholder="AI 생성 후 한 편의 글로 편집합니다."
-              />
-            </label>
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                disabled={warmSectionBusy}
-                onClick={() => void runWarmSectionAndCert()}
-                className="rounded-md bg-[#1a3b6b] px-4 py-2 text-sm font-medium text-white hover:bg-[#2a5b9c] disabled:opacity-50"
-              >
-                {warmSectionBusy ? "생성 중…" : "AI 본문 · 수료증 생성"}
-              </button>
-            </div>
             {warmSectionErr ? <p className="text-sm text-red-600">{warmSectionErr}</p> : null}
-            <div className="border-t border-slate-100 pt-4">
-              <p className="text-sm font-medium text-slate-800">4. 수료 인증서</p>
-              <label className="mt-2 block text-sm text-slate-700">
-                수료증 학년 표기
-                <input
-                  className="mt-1 w-full rounded-md border border-gray-200 px-3 py-2 text-sm"
-                  value={certGradeLabel}
-                  onChange={(e) => setCertGradeLabel(e.target.value)}
-                />
-              </label>
-              <label className="mt-2 block text-sm text-slate-700">
-                수료증 문구 (【이름】은 교사가 직접 입력)
-                <textarea
-                  className="mt-1 w-full min-h-[100px] rounded-md border border-gray-200 px-3 py-2 text-sm"
-                  value={certText}
-                  onChange={(e) => setCertText(e.target.value)}
-                  placeholder="예: 1년의 긴 여정을 멋지게 완주한 ○○○의 성장을 축하하며…"
-                />
-              </label>
-              <button
-                type="button"
-                disabled={certBusy}
-                onClick={() => void regenerateCert()}
-                className="mt-2 rounded-md border border-slate-300 px-4 py-2 text-sm text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-              >
-                수료증 문구만 다시 생성
-              </button>
-            </div>
-            {warmSectionText.trim() ? (
-              <button
-                type="button"
-                className="text-sm text-indigo-600 hover:underline"
-                onClick={() => setWizardStep(4)}
-              >
-                다음: 레포트 확인 · 저장 →
-              </button>
-            ) : null}
+            <button
+              type="button"
+              disabled={warmSectionBusy || !teacherSeed.trim()}
+              onClick={() => void runWarmSectionAndCert()}
+              className="rounded-md bg-[#1a3b6b] px-4 py-2 text-sm font-medium text-white hover:bg-[#2a5b9c] disabled:opacity-50"
+            >
+              {warmSectionBusy ? "생성 중…" : "따뜻한 한마디, 수료증 생성"}
+            </button>
           </fieldset>
         ) : null}
 
-        {wizardStep >= 2 && wizardStep <= 4 ? (
+        {wizardStep === 3 ? (
           <div className="border-t border-slate-100 pt-4">
-            <p className="mb-3 text-xs font-medium uppercase text-slate-500">미리보기</p>
-            <AnnualReportSections model={viewModel} />
+            <AnnualReportSections
+              model={viewModel}
+              editMode={wizardStep === 3 && reportEditMode}
+              onOutlookChange={(v) => setOutlook(clampAnnualOutlook(v))}
+              onWarmSectionChange={setWarmSectionText}
+              onCertTextChange={setCertText}
+              onCertGradeLabelChange={setCertGradeLabel}
+            />
           </div>
         ) : null}
 
-        {wizardStep === 4 ? (
-          <div className="flex flex-wrap items-center gap-3 border-t border-slate-100 pt-4">
-            <button
-              type="submit"
-              disabled={saving}
-              className="rounded-md bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:opacity-50"
-            >
-              {saving ? "저장 중…" : "연간 레포트 저장"}
-            </button>
-            {msg ? <p className="text-sm text-slate-700">{msg}</p> : null}
+        {wizardStep === 3 ? (
+          <div className="space-y-4 border-t border-slate-100 pt-4">
+            <ReportFinalStepActions
+              onPrev={() => setWizardStep(2)}
+              onRegenerate={() => void runWarmSectionAndCert()}
+              regenerateBusy={warmSectionBusy}
+              regenerateDisabled={warmSectionBusy || !teacherSeed.trim()}
+              regenerateLabel="따뜻한 한마디, 수료증 다시 생성"
+              reportEditMode={reportEditMode}
+              onToggleEditMode={() => {
+                setMsg(null);
+                setReportEditMode((v) => !v);
+              }}
+              editDisabled={warmSectionBusy || Boolean(exportBusy)}
+              exportBusy={exportBusy}
+              exportDisabled={!canExportReport}
+              onExportJpg={() => {
+                void runExport("jpg").then((err) => {
+                  if (err) setMsg(err);
+                });
+              }}
+              onExportPdf={() => {
+                void runExport("pdf").then((err) => {
+                  if (err) setMsg(err);
+                });
+              }}
+              saveLabel="연간 레포트 저장"
+              saving={saving}
+            />
+            {msg ? <p className="text-center text-sm text-red-600">{msg}</p> : null}
           </div>
         ) : null}
       </form>
+
+      <ReportSaveRedirectDialog
+        open={saveRedirectOpen}
+        onClose={() => setSaveRedirectOpen(false)}
+        onGoStudentDetail={() => {
+          setSaveRedirectOpen(false);
+          navigate(`/students/${studentId}`, { replace: true });
+        }}
+        onGoStudentsList={() => {
+          setSaveRedirectOpen(false);
+          navigate("/students", { replace: true });
+        }}
+      />
     </div>
   );
 }

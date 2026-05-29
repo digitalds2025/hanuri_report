@@ -5,6 +5,9 @@ import {
   type ReportPrivacyContext,
 } from "./reportStudentPrivacy";
 
+/** 분기 Best 글쓰기 짧은 설명(이미지 옆 카피) — 프롬프트 목표 상한 */
+export const QUARTER_BEST_WRITING_COMMENT_TARGET_CHARS = 50;
+
 /** finalize 전용: 값이 `{...}` 형태여도 마인드맵용 JSON 추출 로직을 타지 않고 줄바꿈만 정리 */
 function normalizeFinalizeString(raw: string): string {
   return raw
@@ -206,17 +209,15 @@ function buildFinalizeFallback(input: QuarterReportFinalizeInput): QuarterReport
   const growth = input.insightPositiveComment.trim();
   const seed = input.teacherSeedMessage.trim();
 
-  const line1 = triple
-    ? `이번 분기 대표 글쓰기로, 「${triple}」의 기운이 묻어 있는 한 편을 골랐습니다.`
-    : "이번 분기 대표 글쓰기로, 아이의 생각과 마음이 고스란히 담긴 한 편을 골랐습니다.";
-  const growthOne = growth.split(/(?<=[.!?。])\s+/)[0]?.trim() ?? growth.slice(0, 70);
-  const line2 = growthOne
-    ? `${growthOne.length > 70 ? `${growthOne.slice(0, 67)}…` : growthOne} 이어지는 태도가 글에도 잘 드러났습니다.`
-    : `${seed.slice(0, 52)}${seed.length > 52 ? "…" : ""} 그 마음이 글에도 닿았습니다.`;
+  const target = QUARTER_BEST_WRITING_COMMENT_TARGET_CHARS;
+  const line1 = "이번 분기 대표 글로, 아이의 마음이 담긴 한 편을 골랐습니다.";
+  const line2 = triple
+    ? `「${triple.split("·")[0]?.trim() ?? triple}」의 기운이 글에도 스며 있습니다.`
+    : "성장의 태도가 글에도 잘 드러났습니다.";
 
   let bestWritingComment = `${line1}\n${line2}`;
-  if (bestWritingComment.length > 120) {
-    bestWritingComment = bestWritingComment.slice(0, 117).trimEnd() + "…";
+  if (bestWritingComment.length > target) {
+    bestWritingComment = line1.length <= target ? line1 : line1.slice(0, target - 1).trimEnd() + "…";
   }
 
   const p1Parts: string[] = [];
@@ -235,6 +236,59 @@ function buildFinalizeFallback(input: QuarterReportFinalizeInput): QuarterReport
 
   const teacherExpanded = stripTeacherReportSalutations(`${paragraph1}\n\n${paragraph2}`);
   return { bestWritingComment: bestWritingComment.trim(), teacherExpanded: teacherExpanded.trim() };
+}
+
+function isBestWritingCommentValid(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 10) return false;
+  if (!/[가-힣]/.test(t)) return false;
+  return true;
+}
+
+function parseBestWritingLinesJson(raw: string): string {
+  const slice = extractBalancedJsonObject(raw) ?? raw.trim();
+  if (!slice.startsWith("{")) return "";
+  try {
+    const j = JSON.parse(slice) as Record<string, unknown>;
+    const l1 = typeof j.line1 === "string" ? j.line1.trim() : "";
+    const l2 = typeof j.line2 === "string" ? j.line2.trim() : "";
+    if (l1 && l2) return `${l1}\n${l2}`;
+    if (l1) return l1;
+    return stringField(j, ["bestWritingComment", "comment", "text"]);
+  } catch {
+    return "";
+  }
+}
+
+/** 통합 JSON에서 bestWritingComment가 비었을 때 — 짧은 카피만 재생성 */
+async function generateBestWritingCommentDedicated(
+  gradeLabel: string,
+  quarterLabel: string,
+  contextBlock: string,
+  bestTarget: number,
+): Promise<string> {
+  const prompt = `당신은 초·중·고 독서·국어 교육 현장의 전문 교사입니다.
+
+${REPORT_NO_PII_PROMPT_RULES}
+
+## 맥락
+- 학년·급: **${gradeLabel}**
+- 분기: **${quarterLabel}**
+
+${contextBlock}
+
+## 출력 (반드시 준수)
+- **유효한 JSON 한 개만**: \`line1\`, \`line2\` (영문 키)
+- 각 값은 한 문장, 마침표로 끝낼 것
+- line1+line2 합쳐 **${bestTarget}자 이내**, 완결된 글만. 빈 문자열 금지`;
+
+  let raw: string;
+  try {
+    raw = await geminiGenerateText(prompt, 0.35, 1024, { responseMimeType: "application/json" });
+  } catch {
+    raw = await geminiGenerateText(prompt, 0.35, 1024);
+  }
+  return parseBestWritingLinesJson(raw).trim();
 }
 
 /**
@@ -262,6 +316,7 @@ export async function generateQuarterReportFinalize(input: QuarterReportFinalize
   );
 
   const gradeLabel = input.gradeLabel.trim() || "해당 학년";
+  const bestTarget = QUARTER_BEST_WRITING_COMMENT_TARGET_CHARS;
 
   const prompt = `당신은 초·중·고 독서·국어 교육 현장의 전문 교사입니다. 학부모에게 전달하는 한국어 문장만 씁니다.
 
@@ -278,11 +333,11 @@ ${block}
 - 키 이름은 **반드시 영문 그대로** 두 개만 사용: \`bestWritingComment\`, \`teacherExpanded\`. (다른 키·한글 키 금지)
 
 ## 필드 1: bestWritingComment
-- 위 **지식 마인드맵 텍스트**, **핵심 태도 3가지**, **긍정적 행동 패턴 코멘트**, **따뜻한 한마디 초안**의 **요지**를 모두 **은근히** 녹여, 대표 글쓰기 이미지 옆에 붙이는 **짧은 카피**처럼 씁니다.
-- **문장 2개 이내**, 문장마다 **한 줄**(줄바꿈 \\n 한 번으로 구분).
-- 첫 문장: 「최근 약 3개월 동안의 글쓰기 가운데 대표로 골랐다」는 뉘앙스.
-- 둘째 문장: 이 학생의 **성장·태도**에 대한 **따뜻한 한 줄** 칭찬(위 성장 인사이트와 연결).
-- 전체 **120자 이내**. 과장·형식적인 나열·책 제목 나열 금지. 빈 문자열 금지.
+- 위 맥락의 **요지**를 은근히 녹여, 대표 **글쓰기 이미지** 옆에 붙이는 **아주 짧은 카피**처럼 씁니다.
+- **문장 1~2개**, 필요 시 줄바꿈 \\n 한 번(문장마다 한 줄).
+- 처음부터 **${bestTarget}자 이내**(공백 포함)로 **완결된 글**만 쓰세요. 길어지면 문장을 줄이고, 중간에서 끊기지 마세요.
+- 첫 문장: 「이번 분기 대표 글을 골랐다」는 뉘앙스. 둘째 문장(있을 때): **성장·태도** 한 줄 칭찬.
+- 과장·나열·책 제목 나열 금지. 빈 문자열 금지.
 
 ## 필드 2: teacherExpanded (선생님의 따뜻한 한마디 — **레포트 본문**)
 - 위 **지식 마인드맵**, **성장 인사이트(3가지 + 긍정 패턴 코멘트)**, **따뜻한 한마디 초안**을 **모두 반영**해, 학부모가 읽는 **레포트 안의 한 블록**처럼 씁니다.
@@ -304,14 +359,34 @@ ${block}
   }
 
   const parsed = parseFinalizeModelJson(raw);
-  const bestWritingComment = applyReportPrivacy(
-    (parsed?.bestWritingComment?.trim() || fb.bestWritingComment).trim(),
+  let bestWritingComment = applyReportPrivacy(
+    (parsed?.bestWritingComment?.trim() || "").trim(),
     privacy,
   );
   const teacherExpanded = applyReportPrivacy(
-    stripTeacherReportSalutations((parsed?.teacherExpanded?.trim() || fb.teacherExpanded).trim()),
+    stripTeacherReportSalutations(
+      (parsed?.teacherExpanded?.trim() || fb.teacherExpanded).trim(),
+    ),
     privacy,
   );
+
+  if (!isBestWritingCommentValid(bestWritingComment)) {
+    bestWritingComment = applyReportPrivacy(fb.bestWritingComment, privacy);
+  }
+  if (!isBestWritingCommentValid(bestWritingComment)) {
+    const dedicated = await generateBestWritingCommentDedicated(
+      gradeLabel,
+      input.quarterLabel,
+      block,
+      bestTarget,
+    );
+    if (dedicated.trim()) {
+      bestWritingComment = applyReportPrivacy(dedicated.trim(), privacy);
+    }
+  }
+  if (!isBestWritingCommentValid(bestWritingComment)) {
+    bestWritingComment = applyReportPrivacy(fb.bestWritingComment, privacy);
+  }
 
   return { bestWritingComment, teacherExpanded };
 }

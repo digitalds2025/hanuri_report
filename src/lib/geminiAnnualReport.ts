@@ -7,6 +7,13 @@ import {
 } from "./reportStudentPrivacy";
 import type { GrowthMomentMonthInput } from "./annualReportCompute";
 import type { AnnualTimelineData } from "./annualReportTypes";
+import {
+  ANNUAL_OUTLOOK_MAX_CHARS,
+  ANNUAL_WARM_SECTION_MAX_CHARS,
+  clampAnnualOutlook,
+  finalizeAnnualWarmSectionAiText,
+  sanitizeAnnualTimelineMonthSummary,
+} from "./annualReportCopy";
 
 function getApiKey(): string {
   return (import.meta.env.VITE_GEMINI_API_KEY as string | undefined)?.trim() ?? "";
@@ -103,14 +110,17 @@ JSON만 출력:
     ...
     "12": "12칸(가장 최근 달) 한 줄 요약"
   },
-  "outlook": "표 아래 전망. 2~4문장. ① 12개월 성장 곡선 ② 강점·변화 ③ 마지막 문장 『내년에는 ~(구체적 기대)』"
+  "outlook": "표 아래 전망. **공백 포함 ${ANNUAL_OUTLOOK_MAX_CHARS}자 이내** 한 덩어리(1~2문장). 12개월 흐름·강점·내년 기대를 압축"
 }
 
 규칙 (필수):
 - months "1"~"12" 모두 포함.
-- 원문 있는 칸: growth_moment를 20~45자 한 줄로 압축(복사 금지).
+- 원문 있는 칸: growth_moment를 20~45자 한 줄로 **그 달의 성장·변화만 직접** 서술(원문 복사·요약 접속어 금지).
+- 월별 한 줄 금지 표현: 「~을/를 독서 후」「독서 후 ~」「~을 읽고」「~을 읽은 후」「이달」「○월에」로 시작.
+- 좋은 예: 「토론에서 자신의 생각을 말로 표현하기 시작했습니다」「글쓰기에서 논리적으로 문장을 이어 가기를 시도했습니다」
+- 나쁜 예: 「○○를 독서 후 토론에 참여했습니다」「독서 후 표현력이 좋아졌습니다」
 - 원문 없는 칸: "".
-- outlook: 있는 달만 근거로 서술, 빈 칸 지어내지 말 것.
+- outlook: 있는 달만 근거, ${ANNUAL_OUTLOOK_MAX_CHARS}자 초과 금지, 빈 칸 지어내지 말 것.
 - 숫자·점수·별점 금지. 「우리 아이」 호칭. 『』 사용.`;
 
   const j = await geminiJson<{ months?: Record<string, string>; outlook?: string }>(prompt, 0.45, 8192);
@@ -118,18 +128,21 @@ JSON만 출력:
   for (let m = 1; m <= 12; m++) {
     const k = String(m);
     const v = j.months?.[k];
-    months[k] = typeof v === "string" ? v.trim() : "";
+    months[k] = sanitizeAnnualTimelineMonthSummary(typeof v === "string" ? v : "");
   }
-  const outlook = typeof j.outlook === "string" ? j.outlook.trim() : "";
+  let outlook = clampAnnualOutlook(typeof j.outlook === "string" ? j.outlook : "");
   const privacy = input.privacy;
   if (privacy) {
     for (const k of Object.keys(months)) {
-      months[k] = applyReportPrivacy(months[k] ?? "", privacy);
+      months[k] = sanitizeAnnualTimelineMonthSummary(
+        applyReportPrivacy(months[k] ?? "", privacy),
+      );
     }
+    outlook = clampAnnualOutlook(applyReportPrivacy(outlook, privacy));
   }
   return {
     months,
-    outlook: privacy ? applyReportPrivacy(outlook, privacy) : outlook,
+    outlook,
   };
 }
 
@@ -193,30 +206,44 @@ export async function generateAnnualWarmSectionCopy(input: {
     "\n",
   );
 
-  const prompt = `당신은 한우리독서토론논술 교사입니다. 학부모용 연간 리포트 **「3. 선생님의 따뜻한 한마디」** 전체 본문을 한 번에 작성합니다.
-(미래 로드맵과 따뜻한 한마디를 **나누지 말고** 하나의 글로 이어지게 씁니다.)
+  const transitionExample = trans
+    ? `예) ${trans.fromLabel} → ${trans.toLabel}: ${trans.curriculumHighlights.join(", ")}`
+    : "학년 전환 정보가 없으면 일반적인 독서·논술·토론 성장 방향으로 작성.";
+
+  const prompt = `당신은 한우리독서토론논술 교사입니다. 연간 리포트 **「선생님의 따뜻한 한마디」** 본문을 작성합니다.
 
 ${REPORT_NO_PII_PROMPT_RULES}
 
-${input.targetYear}년 · 학년·급: ${input.studentGradeLabel}
+## 리포트에 반영된 정보 (아래를 근거로 맞춤형 로드맵을 구성)
+- **현재 학년·급**(리포트 상단): ${input.studentGradeLabel}
+- **12개월 역량 분석 평균**(내부 참고, 본문에 숫자·점수·"/10" 노출 금지):
+${avgBlock}
+- **현재 학년 → 다음 학년** 교육과정 핵심 역량(사전 DB 매핑):
+${transBlock}
+${transitionExample}
 
-## 교사 초안 (1~2줄, 반드시 반영)
+## 교사 초안 (1~2줄, 반드시 의미를 살려 반영)
 ${input.teacherSeed.trim()}
 
-## 학년 전환·교육과정
-${transBlock}
-
-## 12개월 역량 평균 (내부 참고 — 숫자·"/10" 노출 금지)
-${avgBlock}
+## 작성 컨셉 (필수)
+1. 아이의 12개월 역량 경향(강점·보완)과 **다음 학년 교육과정에서 새로 강조되는 역량**을 비교해, 맞춤형 **내년 학습 로드맵**을 짧게 제시합니다.
+2. 한우리 수업에서 어떻게 이어갈지(한우리 방향)를 자연스럽게 연결합니다.
+3. 교사 초안을 풀어 **따뜻한 격려**로 이어지게 하고, **마지막은 다음 학년 수업에 대한 기대감**으로 마무리합니다.
+4. 미래 로드맵과 한마디를 **한 덩어리**로 씁니다. 소제목·「미래 로드맵」·「한마디」 등 **섹션 라벨 금지**.
 
 ## 작업
-JSON만: { "warm_section": "통합 본문 5~8문단, 문단 사이 \\\\n\\\\n. ① 다음 학년 교육과정에서 달라지는 점·한우리 수업 비전(로드맵) ② 올해 성장과 연결 ③ 교사 초안을 풀어 쓴 따뜻한 한마디·내년 기대. 소제목·'미래 로드맵' 등 라벨 금지, 한 편의 편지처럼." }
+JSON만 출력:
+{ "warm_section": "통합 본문. **공백 포함 ${ANNUAL_WARM_SECTION_MAX_CHARS}자 이내** 한 덩어리(2~4문장 권장)." }
 
-규칙: 비난 금지, 「우리 아이」 호칭, 『』 사용.`;
+## 문체·금지 (필수)
+- **「학부모님께,」「학부모님께」 등 편지식 서두로 시작하지 말 것** — 곧바로 우리 아이·올해 성장·내년 로드맵 서술로 시작.
+- 비난 금지, 「우리 아이」 호칭, 『』 사용.
+- ${ANNUAL_WARM_SECTION_MAX_CHARS}자 초과 금지.`;
 
-  const j = await geminiJson<{ warm_section?: string }>(prompt, 0.5, 8192);
-  const text = typeof j.warm_section === "string" ? j.warm_section.trim() : "";
-  return input.privacy ? applyReportPrivacy(text, input.privacy) : text;
+  const j = await geminiJson<{ warm_section?: string }>(prompt, 0.45, 2048);
+  let text = typeof j.warm_section === "string" ? finalizeAnnualWarmSectionAiText(j.warm_section) : "";
+  if (input.privacy) text = finalizeAnnualWarmSectionAiText(applyReportPrivacy(text, input.privacy));
+  return text;
 }
 
 export async function generateAnnualCertText(input: {

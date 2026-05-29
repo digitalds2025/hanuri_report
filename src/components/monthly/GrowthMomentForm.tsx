@@ -36,14 +36,12 @@ function toggleInList(list: string[], item: string): string[] {
 
 function KeywordRow({
   label,
-  hint,
   presets,
   selected,
   onChange,
   customPlaceholder,
 }: {
   label: string;
-  hint: string;
   presets: readonly string[];
   selected: string[];
   onChange: (next: string[]) => void;
@@ -64,10 +62,7 @@ function KeywordRow({
 
   return (
     <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/60 p-3">
-      <div>
-        <p className="text-sm font-medium text-slate-800">{label}</p>
-        <p className="text-xs text-slate-500">{hint}</p>
-      </div>
+      <p className="text-sm font-medium text-slate-800">{label}</p>
       <div className="flex flex-wrap gap-1.5">
         {presets.map((p) => {
           const on = selected.includes(p);
@@ -168,19 +163,17 @@ export function GrowthMomentForm({
     <div className="space-y-4">
       <KeywordRow
         label="1단 · 활동 영역 (필수)"
-        hint="무엇을 했는가 — 프리셋을 눌러 선택하거나, 아래에서 직접 추가하세요."
         presets={PRESET_ACTIVITY_KEYWORDS}
         selected={meta.step1}
         onChange={(step1) => onMetaChange({ ...meta, step1 })}
-        customPlaceholder="예: 문해력 수업, 독후감 쓰기"
+        customPlaceholder="직접 추가"
       />
       <KeywordRow
         label="2단 · 태도 및 행동 (필수)"
-        hint="해당 활동에서 보인 구체적 모습 — 프리셋 또는 직접 추가."
         presets={PRESET_ATTITUDE_KEYWORDS}
         selected={meta.step2}
         onChange={(step2) => onMetaChange({ ...meta, step2 })}
-        customPlaceholder="예: 차분히 경청하는"
+        customPlaceholder="직접 추가"
       />
       <label className="block text-sm">
         <span className="text-slate-600">3단 · 교사 학습 기록 (선택)</span>
@@ -188,7 +181,6 @@ export function GrowthMomentForm({
           className="mt-1 min-h-[72px] w-full rounded-lg border border-slate-300 bg-white px-3 py-2"
           value={meta.step3}
           onChange={(e) => onMetaChange({ ...meta, step3: e.target.value })}
-          placeholder="수업 중 관찰한 내용을 자유롭게 적어 주세요. 비워 두어도 됩니다."
         />
       </label>
 

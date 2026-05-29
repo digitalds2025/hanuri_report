@@ -6,6 +6,12 @@ import {
 import type { HalfYearMonthSlot } from "./halfYearReportCompute";
 import type { HalfYearReadingTypeDef } from "./halfYearReadingTypes";
 import {
+  clampHalfYearGaugeDesc,
+  clampHalfYearReadingTypeDesc,
+  HALF_YEAR_GAUGE_DESC_MAX_CHARS,
+  HALF_YEAR_READING_TYPE_DESC_MAX_CHARS,
+} from "./halfYearReportCopy";
+import {
   applyReportPrivacy,
   REPORT_NO_PII_PROMPT_RULES,
   type ReportPrivacyContext,
@@ -109,15 +115,15 @@ function averagesBlock(avg: Record<PillarKey, number>): string {
   return PILLAR_KEYS.map((k) => `- ${pillarLabelsKo[k]}: 평균 ${(avg[k] ?? 0).toFixed(1)}/10`).join("\n");
 }
 
+const PILLAR_NAMES_FOR_PROMPT = PILLAR_KEYS.map((k) => pillarLabelsKo[k]).join(", ");
+
 export type HalfYearAiCopy = {
+  /** 3-4회차·5-6회차 구간 통합 서술 (2문단, \\n\\n 구분) */
   score_overview: string;
-  score_reading_desc: string;
-  score_thinking_desc: string;
-  score_discussion_desc: string;
-  score_writing_desc: string;
-  score_growth_desc: string;
   gauge_high_desc: string;
   gauge_low_desc: string;
+  /** 독서 유형 본문 (유형명·역량 조합 라벨 없이, 120자 이내) */
+  reading_type_description: string;
 };
 
 export async function generateHalfYearCompetencyCopy(input: {
@@ -127,6 +133,7 @@ export async function generateHalfYearCompetencyCopy(input: {
   averages: Record<PillarKey, number>;
   gaugeHigh: PillarKey;
   gaugeLow: PillarKey;
+  readingTypeName: string;
   privacy?: ReportPrivacyContext;
 }): Promise<HalfYearAiCopy> {
   const prompt = `당신은 독서·국어 교육 현장의 전문 교사입니다. 학부모용 **반기(6개월) 성장 리포트** 문구를 작성합니다.
@@ -146,42 +153,51 @@ ${averagesBlock(input.averages)}
 - 집중 성취(최고): ${pillarLabelsKo[input.gaugeHigh]}
 - 향후 강화(최저): ${pillarLabelsKo[input.gaugeLow]}
 
+## 독서 유형 (화면에는 유형명 「${input.readingTypeName}」만 별도 표시)
+- 본문에는 유형명·「논리적 사고 + …」 같은 **역량 조합 문구를 넣지 말 것**
+
 ## 작업
-JSON만 출력하세요. 키는 정확히 아래와 같습니다.
+JSON만 출력하세요. 키는 정확히 아래 4개뿐입니다.
 
 {
-  "score_overview": "레이더 차트 옆 본문. 2문단(문단 사이 \\n\\n). 3~4회차 구간과 5~6회차 구간 성장 흐름을 자연스럽게 서술. 숫자·점수·별점 금지.",
-  "score_reading_desc": "${pillarLabelsKo.reading} — 한 문장, '높은 편'·'꾸준히 상승' 등 자연어",
-  "score_thinking_desc": "${pillarLabelsKo.thinking} — 한 문장",
-  "score_discussion_desc": "${pillarLabelsKo.discussion} — 한 문장",
-  "score_writing_desc": "${pillarLabelsKo.writing} — 한 문장",
-  "score_growth_desc": "${pillarLabelsKo.growth} — 한 문장",
-  "gauge_high_desc": "집중 성취 포인트 게이지용 1~2문장(숫자 금지)",
-  "gauge_low_desc": "향후 강화 포인트 게이지용 1~2문장(숫자 금지, 격려 톤)"
+  "score_overview": "정확히 2문단. 문단 사이는 \\\\n\\\\n. 첫 문단은 반드시 『3-4회차 구간에서는』로 시작하고, 둘째 문단은 반드시 『5-6회차 구간에서는』로 시작합니다. 각 문단 안에서 ${PILLAR_NAMES_FOR_PROMPT} 등 역량을 **한 덩어리의 흐름**으로 엮어 서술하세요. 역량별 소제목·목록·줄바꿈 나열 금지.",
+  "gauge_high_desc": "집중 성취 포인트 게이지 설명. **공백 포함 ${HALF_YEAR_GAUGE_DESC_MAX_CHARS}자 이내** 한 문장(숫자 금지)",
+  "gauge_low_desc": "향후 강화 포인트 게이지 설명. **공백 포함 ${HALF_YEAR_GAUGE_DESC_MAX_CHARS}자 이내** 한 문장(숫자 금지, 격려 톤)",
+  "reading_type_description": "『${input.readingTypeName}』 유형에 맞는 독서·학습 성향 설명. **공백 포함 ${HALF_YEAR_READING_TYPE_DESC_MAX_CHARS}자 이내** 한 덩어리. 유형명·역량 이름 나열·『+』 조합 표기 금지"
 }
 
-규칙:
-- 비난·낙인 금지. 아이는 「우리 아이」 등 비식별 호칭만.
-- ASCII 큰따옴표(") 대신 『』 사용.`;
+## score_overview 예시 (형식만 참고, 내용은 데이터에 맞게 새로 작성)
+3-4회차 구간에서는 독서 몰입도가 안정적으로 유지되었고, 글쓰기 역량은 꾸준히 발전하는 모습을 보였습니다. 생각의 깊이와 참여 의지는 대체로 일관된 흐름을 이어갔으나, 어휘·대화 능력은 잠시 주춤하는 경향을 보였습니다.
 
-  const j = await geminiJson<Record<string, unknown>>(prompt, 0.45, 8192);
+5-6회차 구간에서는 독서 몰입도가 다소 아쉬운 흐름을 보였으나, 글쓰기 역량은 이전에 비해 크게 향상되는 인상적인 성장을 이루었습니다. 생각의 깊이와 참여 의지는 이 기간 동안 다소 감소하는 모습을 보였으며, 어휘·대화 능력은 소폭의 변화를 보였습니다.
+
+규칙:
+- 역량마다 따로 문단·소제목을 두지 말 것
+- 비난·낙인 금지. 아이는 「우리 아이」 등 비식별 호칭만
+- gauge_high_desc·gauge_low_desc는 각각 ${HALF_YEAR_GAUGE_DESC_MAX_CHARS}자 초과 금지
+- reading_type_description은 ${HALF_YEAR_READING_TYPE_DESC_MAX_CHARS}자 초과 금지
+- ASCII 큰따옴표(") 대신 『』 사용`;
+
+  const j = await geminiJson<Record<string, unknown>>(prompt, 0.45, 4096);
   const pick = (k: string) => (typeof j[k] === "string" ? (j[k] as string).trim() : "");
 
   const copy: HalfYearAiCopy = {
     score_overview: pick("score_overview"),
-    score_reading_desc: pick("score_reading_desc"),
-    score_thinking_desc: pick("score_thinking_desc"),
-    score_discussion_desc: pick("score_discussion_desc"),
-    score_writing_desc: pick("score_writing_desc"),
-    score_growth_desc: pick("score_growth_desc"),
-    gauge_high_desc: pick("gauge_high_desc"),
-    gauge_low_desc: pick("gauge_low_desc"),
+    gauge_high_desc: clampHalfYearGaugeDesc(pick("gauge_high_desc")),
+    gauge_low_desc: clampHalfYearGaugeDesc(pick("gauge_low_desc")),
+    reading_type_description: clampHalfYearReadingTypeDesc(pick("reading_type_description")),
   };
+
+  if (!copy.reading_type_description) {
+    copy.reading_type_description = clampHalfYearReadingTypeDesc(
+      `6개월간의 활동 속에서 『${input.readingTypeName}』의 특징이 고르게 드러났습니다. 읽기와 생각이 자연스럽게 이어지며, 앞으로도 이 흐름을 이어가길 응원합니다.`,
+    );
+  }
 
   if (!copy.score_overview) {
     copy.score_overview = [
-      "최근 6개월 동안 우리 아이는 여러 활동 속에서 고른 성장의 결을 보여 주었습니다.",
-      "앞으로도 읽기·생각·말하기·글쓰기가 자연스럽게 이어지도록 따뜻하게 응원해 주시면 좋겠습니다.",
+      "3-4회차 구간에서는 독서 몰입·이해와 글쓰기 완성도가 고르게 이어지는 모습이 돋보였으며, 논리적 사고와 언어·토론 태도도 안정적인 흐름을 보였습니다.",
+      "5-6회차 구간에서는 학습 의지·참여가 꾸준히 이어졌고, 읽기·글쓰기 역량이 조금씩 깊어지는 성장의 결을 보여 주었습니다.",
     ].join("\n\n");
   }
 

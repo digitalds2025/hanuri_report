@@ -5,8 +5,8 @@ import {
   type ReportPrivacyContext,
 } from "./reportStudentPrivacy";
 
-/** 분기 마인드맵 코멘트 — AI가 스스로 맞출 목표 분량(서버에서 자르지 않음) */
-export const QUARTER_MINDMAP_COMMENT_TARGET_CHARS = 560;
+/** 분기 마인드맵 설명(지식·수업 타당성) — bestWritingComment와 동일 상한(프롬프트 목표) */
+export const QUARTER_MINDMAP_COMMENT_TARGET_CHARS = 120;
 
 /** 분기 마인드맵 생성용 — `books`에서 가져온 행 */
 export type QuarterMindmapBookRow = {
@@ -33,11 +33,14 @@ function getModel(): string {
   return m || "gemini-2.0-flash";
 }
 
+type GeminiMindmapResult = { text: string; finishReason?: string };
+
 async function geminiGeneratePlainText(
   prompt: string,
   temperature = 0.52,
   maxOutputTokens: number = 4096,
-): Promise<string> {
+  responseMimeType: string = "application/json",
+): Promise<GeminiMindmapResult> {
   const key = getApiKey();
   if (!key) {
     throw new Error("VITE_GEMINI_API_KEY 가 .env 에 설정되어 있지 않습니다.");
@@ -53,7 +56,7 @@ async function geminiGeneratePlainText(
       generationConfig: {
         temperature,
         maxOutputTokens,
-        responseMimeType: "text/plain",
+        responseMimeType,
       },
     }),
   });
@@ -78,7 +81,10 @@ async function geminiGeneratePlainText(
   }
 
   const d = data as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
+    candidates?: {
+      content?: { parts?: { text?: string }[] };
+      finishReason?: string;
+    }[];
     promptFeedback?: { blockReason?: string };
   };
 
@@ -86,10 +92,16 @@ async function geminiGeneratePlainText(
     throw new Error(`프롬프트 차단: ${d.promptFeedback.blockReason}`);
   }
 
-  const text = d.candidates?.[0]?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
+  const candidate = d.candidates?.[0];
+  const text = candidate?.content?.parts?.map((p) => p.text ?? "").join("") ?? "";
   const trimmed = text.trim();
-  if (!trimmed) throw new Error("Gemini가 빈 응답을 반환했습니다.");
-  return trimmed;
+  if (!trimmed) {
+    if (candidate?.finishReason === "MAX_TOKENS") {
+      throw new Error("AI 응답이 토큰 한도에서 잘렸습니다. 잠시 후 다시 시도해 주세요.");
+    }
+    throw new Error("Gemini가 빈 응답을 반환했습니다.");
+  }
+  return { text: trimmed, finishReason: candidate?.finishReason };
 }
 
 function formatKeywords(kw: Json): string {
@@ -128,33 +140,33 @@ function formatBookBlock(b: QuarterMindmapBookRow, index: number): string {
 function buildPrompt(studentGradeLabel: string, quarterLabel: string, books: QuarterMindmapBookRow[]): string {
   const target = QUARTER_MINDMAP_COMMENT_TARGET_CHARS;
   const blocks = books.map((b, i) => formatBookBlock(b, i)).join("\n\n");
-  return `당신은 독서·교과 연계 수업을 설계하는 국어·교양 교육 전문가입니다.
+  return `당신은 초·중·고 독서·국어 교육 현장의 전문 교사입니다. 학부모에게 전달하는 한국어 문장만 씁니다.
 
 ${REPORT_NO_PII_PROMPT_RULES}
 
 ## 맥락
-- 학년·급: **${studentGradeLabel}** (본문은「초1~초6」「중1~중3」「고1~고3」한글 표기만)
-- 분기: **${quarterLabel}**
+- 학년·급(식별용): **${studentGradeLabel}** — 본문에도 **학년·급만** 쓰고 이름·닉네임은 쓰지 마세요.
+- 분기(또는 기간 표기): **${quarterLabel}**
 - 아래는 이 분기 월간 레포트에 연결된 도서 메타입니다.
 
 ${blocks}
 
-## 작성 지시 (반드시 준수)
-**순수 한국어 본문만** 출력하세요. JSON·마크다운·코드·필드명·따옴표 장식 제목 금지.
+## 출력 형식 (반드시 준수)
+- **유효한 JSON 객체 한 개만** 출력하세요. 앞뒤 설명·마크다운·코드펜스 금지.
+- 키 이름은 **반드시 영문 그대로** 두 개만: \`line1\`, \`line2\`. (다른 키·한글 키 금지)
+- 각 값은 **한 문장**(마침표·물음표·느낌표로 **끝까지 완결**). 문장 중간에서 끊기면 안 됩니다.
 
-### 분량 (가장 중요)
-- 목표: **한글 ${target}자 전후**(공백 포함, **${target - 40}~${target + 40}자**).
-- **이 분량 안에서 처음부터 끝까지 완결**된 글을 쓰세요. 길어질 것 같으면 **문장을 줄여** 범위에 맞추세요.
-- 시스템이 글을 잘라 주지 않으므로, **범위를 넘긴 채로 쓰면 중간에 끊긴 것처럼 보일 수 있습니다** — 반드시 스스로 분량을 조절하세요.
-- 너무 짧은 한두 문장만 쓰지 마세요.
+## line1 (첫 문장)
+- 이번 분기 도서·주제가 **해당 학년 수준·발달**과 맞는 이유를 **한 줄**로(책 제목 나열 금지).
 
-### 내용
-- **3문단**, 문단당 **2~3문장**, 문단 사이 빈 줄 1줄.
-- 1문단: 해당 학년 발달·학습 맥락.
-- 2문단: 이번 분기 도서 주제·역량·정서가 그 맥락과 맞는 이유(제목 나열 최소화).
-- 3문단: 이 구성으로 수업한 선택의 타당성 + 가정에서 이어갈 짧은 제안 1문장.
+## line2 (둘째 문장)
+- 이 구성으로 **수업·독서 활동을 이어간 선택의 타당성**을 **따뜻하게** 한 줄로 마무리.
 
-인용 부호가 필요하면 『』를 쓰고, ASCII 큰따옴표(")는 본문에 쓰지 마세요.`;
+## 분량
+- line1·line2를 합쳐 **대략 ${target}자 이내**가 목표입니다. **문장을 끝까지 쓰는 것이 더 중요**하며, 완결을 위해 **조금 넘어도 됩니다**.
+- 과장·공문체·형식적 나열 금지. 빈 문자열 금지.
+
+인용 부호가 필요하면 『』를 쓰고, JSON 문자열 값 안에는 ASCII 큰따옴표(")를 이스케이프하세요.`;
 }
 
 function cleanupPlainCommentText(t: string): string {
@@ -165,38 +177,68 @@ function cleanupPlainCommentText(t: string): string {
     .trim();
 }
 
-/**
- * 모델이 JSON으로 감쌌을 때만 복원. 본문 안의 " 때문에 잘리는 정규식 파싱은 사용하지 않습니다.
- */
-export function normalizeQuarterMindmapModelText(raw: string): string {
+function stripCodeFence(raw: string): string {
   let t = raw.trim();
   if (t.startsWith("```")) {
     t = t.replace(/^```(?:json|text)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
   }
+  return t;
+}
 
+/** AI 응답(JSON line1/line2 또는 평문) → textarea·레포트용 2줄 평문 */
+export function parseMindmapAiResponse(raw: string): string {
+  const t = stripCodeFence(raw);
   if (t.startsWith("{")) {
     try {
       const j = JSON.parse(t) as Record<string, unknown>;
+      const l1 = typeof j.line1 === "string" ? j.line1.trim() : "";
+      const l2 = typeof j.line2 === "string" ? j.line2.trim() : "";
+      if (l1 && l2) return cleanupPlainCommentText(`${l1}\n${l2}`);
       for (const k of ["ai_knowledge_network_comment", "comment", "text", "message", "content"] as const) {
         const v = j[k];
         if (typeof v === "string" && v.trim()) return cleanupPlainCommentText(v);
       }
     } catch {
-      const unwrapped = t
-        .replace(/^\{\s*"(?:ai_knowledge_network_comment|comment|text|message)"\s*:\s*"/, "")
-        .replace(/"\s*,\s*"[^"]+"\s*:[\s\S]*$/, "")
-        .replace(/"\s*\}\s*$/, "");
-      if (unwrapped.length > 40 && unwrapped !== t) {
-        return cleanupPlainCommentText(unwrapped.replace(/\\"/g, '"'));
-      }
+      /* 평문으로 처리 */
     }
   }
+  return cleanupPlainCommentText(t);
+}
 
+/** 문장이 마침표 없이 끊긴 경우(모델 조기 종료) */
+export function isMindmapCommentIncomplete(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 36) return true;
+  if (!/[.!?。](?:['"»」]|\s*)$/.test(t)) return true;
+
+  const lines = t.split(/\n+/).map((s) => s.trim()).filter(Boolean);
+  if (lines.length >= 2) {
+    return lines.some((line) => !/[.!?。]$/.test(line));
+  }
+
+  const sentences = t.split(/(?<=[.!?。])\s*/).filter((s) => s.trim());
+  if (sentences.length < 2) return true;
+  return sentences.some((s) => !/[.!?。]$/.test(s.trim()));
+}
+
+/**
+ * @deprecated parseMindmapAiResponse / displayMindmapKnowledgeComment 사용
+ */
+export function normalizeQuarterMindmapModelText(raw: string): string {
+  return parseMindmapAiResponse(raw);
+}
+
+/** summaryText·DB에 저장된 코멘트 — 재파싱으로 잘리지 않게 평문만 정리 */
+export function displayMindmapKnowledgeComment(stored: string): string {
+  const t = stored.trim();
+  if (!t) return "";
+  if (t.startsWith("{")) return parseMindmapAiResponse(t);
   return cleanupPlainCommentText(t);
 }
 
 /**
- * 분기 「지식 마인드맵」 — 수업 선택 타당성 코멘트(평문). 본문은 서버에서 자르지 않습니다.
+ * 분기 「지식 마인드맵」 — 수업 선택 타당성 짧은 설명(평문 2줄).
+ * 분량은 프롬프트 목표(~120자)만 두고, 서버에서 잘라내지 않습니다.
  */
 export async function generateQuarterKnowledgeMindmapComment(input: {
   studentGradeLabel: string;
@@ -207,13 +249,25 @@ export async function generateQuarterKnowledgeMindmapComment(input: {
   if (!input.books.length) {
     throw new Error("생성할 도서 정보가 없습니다.");
   }
-  const prompt = buildPrompt(input.studentGradeLabel, input.quarterLabel, input.books);
-  const raw = await geminiGeneratePlainText(prompt, 0.45, 4096);
-  const normalized = normalizeQuarterMindmapModelText(raw);
-  if (normalized.length < 80) {
+  const basePrompt = buildPrompt(input.studentGradeLabel, input.quarterLabel, input.books);
+  const retryNote =
+    "\n\n[중요] 직전 응답이 문장 중간에서 끊겼습니다. line1·line2 **각각** 마침표(.)로 **끝나는 완결 문장**만 다시 출력하세요.";
+
+  let last = "";
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const prompt = attempt === 0 ? basePrompt : basePrompt + retryNote;
+    const { text: raw, finishReason } = await geminiGeneratePlainText(prompt, 0.45, 8192);
+    last = parseMindmapAiResponse(raw);
+    const truncated = finishReason === "MAX_TOKENS" || isMindmapCommentIncomplete(last);
+    if (last.length >= 24 && !truncated) {
+      return applyReportPrivacy(last, input.privacy);
+    }
+  }
+
+  if (last.length < 24) {
     throw new Error(
       "AI 코멘트가 너무 짧게 생성되었습니다. 잠시 후 다시 「지식 마인드맵 생성」을 눌러 주세요.",
     );
   }
-  return applyReportPrivacy(normalized, input.privacy);
+  return applyReportPrivacy(last, input.privacy);
 }

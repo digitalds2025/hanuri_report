@@ -6,7 +6,6 @@ import {
   Legend,
   Line,
   LineChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
@@ -25,7 +24,6 @@ import {
   findQuarterReportForYearMonth,
   halfYearCodeForEndYm,
   reportsByYearMonth,
-  roundTableWindowBounds,
   currentYearMonth,
   isMonthDeadlinePassed,
 
@@ -166,6 +164,7 @@ export function StudentDetailPage() {
   const [openReportMenuRound, setOpenReportMenuRound] = useState<number | null>(null);
   const [reportMenuPos, setReportMenuPos] = useState<{ left: number; top: number } | null>(null);
   const reportMenuButtonRefs = useRef(new Map<number, HTMLButtonElement>());
+  const roundTableScrollRef = useRef<HTMLDivElement>(null);
 
   /** 열려 있는 회차 열의 「레포트 보기」 메뉴 */
   const [openViewMenuRound, setOpenViewMenuRound] = useState<number | null>(null);
@@ -245,15 +244,20 @@ export function StudentDetailPage() {
     };
   }, [openReportMenuRound, openViewMenuRound]);
 
-  const roundWindow = useMemo(
-    () => (student ? roundTableWindowBounds(focusRound, roundCount) : { start: 1, end: 12 }),
-    [student, focusRound, roundCount],
-  );
+  /** 1회차 ~ (현재+미래 버퍼) 전체 — 과거는 스크롤로, 미래는 시그널만 */
   const rounds = useMemo(
-    () =>
-      Array.from({ length: roundWindow.end - roundWindow.start + 1 }, (_, i) => roundWindow.start + i),
-    [roundWindow],
+    () => (student ? Array.from({ length: roundCount }, (_, i) => i + 1) : []),
+    [student, roundCount],
   );
+
+  const pillarChartWidthPx = useMemo(() => Math.max(360, rounds.length * 52), [rounds.length]);
+
+  useLayoutEffect(() => {
+    const scroller = roundTableScrollRef.current;
+    if (!scroller || focusRound < 1) return;
+    const col = scroller.querySelector<HTMLElement>(`[data-round-col="${focusRound}"]`);
+    col?.scrollIntoView({ inline: "center", block: "nearest" });
+  }, [focusRound, roundCount, anchorYm, student?.student_id]);
 
   /** 위 회차 표와 동일한 열 순서 — 저장된 월간만 점 표시, 미작성은 null 로 선이 끊김 */
   const roundPillarChartRows = useMemo(() => {
@@ -428,12 +432,16 @@ export function StudentDetailPage() {
           <div className="rounded-xl border border-slate-200 bg-white shadow-sm">
           <div className="relative z-0 border-b border-slate-100 px-4 py-3 sm:px-5">
             <h2 className="text-sm font-semibold text-slate-800">회차별 월간 리포트</h2>
+            <p className="mt-1 text-xs text-slate-500">
+              1회차부터 전체 회차가 표시됩니다. 왼쪽으로 스크롤하면 과거 회차·레포트를 볼 수 있고, 오늘 회차
+              근처로는 처음에 자동으로 맞춰 둡니다.
+            </p>
             {periodErr ? (
               <p className="mt-2 text-xs text-red-600">기간(분기·반기·연간) 레포트 불러오기: {periodErr}</p>
             ) : null}
           </div>
 
-          <div className="overflow-x-auto px-2 pb-4 pt-2 sm:px-4">
+          <div ref={roundTableScrollRef} className="overflow-x-auto px-2 pb-4 pt-2 sm:px-4">
             <table
               className="w-full min-w-max border-separate border-spacing-x-1 border-spacing-y-2 text-center"
               style={{ minWidth: `${rounds.length * 6.75}rem` }}
@@ -446,6 +454,7 @@ export function StudentDetailPage() {
                       <th
                         key={r}
                         scope="col"
+                        data-round-col={r}
                         className={`min-w-[6.75rem] max-w-[7rem] px-1 pb-1 align-bottom text-xs font-semibold ${
                           r === focusRound ? "text-indigo-800" : "text-slate-700"
                         }`}
@@ -736,7 +745,10 @@ export function StudentDetailPage() {
 
           <div className="border-t border-slate-100 px-4 py-4 sm:px-5">
             <h3 className="text-sm font-semibold text-slate-800">회차별 5대 역량 점수</h3>
-            
+            <p className="mt-1 text-xs text-slate-500">
+              저장된 월간 레포트 역량 점수를 1회차부터 표시합니다. 회차가 많으면 가로 스크롤하세요.
+            </p>
+
             {lr ? (
               <p className="mt-3 text-sm text-slate-500">점수 불러오는 중…</p>
             ) : roundPillarChartRows.length === 0 ? (
@@ -745,16 +757,24 @@ export function StudentDetailPage() {
               <div className="mt-4 space-y-2">
                 {!hasAnyPillarChartPoint ? (
                   <p className="text-xs text-slate-600">
-                    이 구간에는 월간 역량 점수가 없습니다. X축 회차(파란 밑줄)를 누르면 레포트 보기 메뉴가 열립니다.
+                    아직 월간 역량 점수가 없습니다. X축 회차(파란 밑줄)를 누르면 저장된 레포트 보기 메뉴가 열립니다.
                   </p>
                 ) : null}
-                <div className="h-[min(22rem,70vw)] w-full min-h-[240px]">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={roundPillarChartRows} margin={{ top: 8, right: 8, left: 0, bottom: 12 }}>
+                <div className="mt-2 overflow-x-auto">
+                  <div
+                    className="min-h-[240px]"
+                    style={{ width: pillarChartWidthPx, height: "min(22rem, 70vw)" }}
+                  >
+                    <LineChart
+                      width={pillarChartWidthPx}
+                      height={280}
+                      data={roundPillarChartRows}
+                      margin={{ top: 8, right: 8, left: 0, bottom: 12 }}
+                    >
                       <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
                       <XAxis
                         dataKey="name"
-                        interval={0}
+                        interval={rounds.length > 16 ? 1 : 0}
                         height={56}
                         angle={-32}
                         textAnchor="end"
@@ -793,7 +813,7 @@ export function StudentDetailPage() {
                         />
                       ))}
                     </LineChart>
-                  </ResponsiveContainer>
+                  </div>
                 </div>
               </div>
             )}
