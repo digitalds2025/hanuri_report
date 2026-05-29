@@ -33,6 +33,8 @@ export type Yes24SearchResult = {
   publisher: string;
   url: string;
   cover_url: string | null;
+  /** Playwright로 내려받은 표지(JPEG 등) — 브라우저에서 Storage 업로드용, DB에는 저장하지 않음 */
+  cover_jpeg_base64?: string | null;
   category: string | null;
   introduce: string | null;
   author_cmt: string | null;
@@ -248,6 +250,25 @@ async function coverImageUrlFromDetail(page: Page, onLog?: (message: string) => 
   return null;
 }
 
+async function coverImagePayloadFromDetail(
+  page: Page,
+  onLog?: (message: string) => void,
+): Promise<{ cover_url: string | null; cover_jpeg_base64: string | null }> {
+  const cover_url = await coverImageUrlFromDetail(page, onLog);
+  if (!cover_url) return { cover_url: null, cover_jpeg_base64: null };
+  try {
+    const resp = await page.request.get(cover_url, { timeout: 20_000 });
+    if (!resp.ok()) return { cover_url, cover_jpeg_base64: null };
+    const body = await resp.body();
+    if (!body.length) return { cover_url, cover_jpeg_base64: null };
+    onLog?.("표지 이미지를 내려받았어요.");
+    return { cover_url, cover_jpeg_base64: body.toString("base64") };
+  } catch {
+    onLog?.("표지 URL은 확보했어요. 앱에서 Storage로 옮길게요.");
+    return { cover_url, cover_jpeg_base64: null };
+  }
+}
+
 async function geminiExtractAiFields(
   bundle: {
     title?: string | null;
@@ -453,7 +474,7 @@ export async function searchYes24AndAnalyze(
       const finalTitle = detailTitle ?? title;
 
       onLog?.("책 표지를 저장할게요.");
-      const cover_url = await coverImageUrlFromDetail(page, onLog);
+      const { cover_url, cover_jpeg_base64 } = await coverImagePayloadFromDetail(page, onLog);
       if (cover_url) {
         onLog?.("표지까지 예쁘게 담았어요!");
       }
@@ -488,6 +509,7 @@ export async function searchYes24AndAnalyze(
         publisher,
         url,
         cover_url,
+        cover_jpeg_base64,
         category,
         introduce,
         author_cmt,

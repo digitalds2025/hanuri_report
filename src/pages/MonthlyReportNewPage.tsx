@@ -1,5 +1,5 @@
 import { type FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { GrowthMomentForm } from "../components/monthly/GrowthMomentForm";
 import {
   HanuriBookSearchPanel,
@@ -7,6 +7,13 @@ import {
   type BookSearchHit,
 } from "../components/books/HanuriBookSearchPanel";
 import { MonthlyReportResultView } from "../components/monthly/MonthlyReportResultView";
+import { MonthlyReportSaveRedirectDialog } from "../components/monthly/MonthlyReportSaveRedirectDialog";
+import {
+  downloadMonthlyReportJpg,
+  downloadMonthlyReportPdf,
+  MONTHLY_REPORT_EXPORT_ROOT_ID,
+  monthlyReportExportFilename,
+} from "../lib/monthlyReportExport";
 import {
   generateMonthlyReportBundle,
   type MonthlyReportAITokenUsage,
@@ -24,6 +31,7 @@ import {
 } from "../lib/monthlyGrowthMeta";
 import { bookKeywordsToDisplayItems, reportHeaderTitle } from "../lib/monthlyReportDisplay";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
+import { MONTHLY_REPORT_BOOK_COVER_IMG_CLASS } from "../lib/monthlyReportLayout";
 import { uploadWritingImageForStudent } from "../lib/writingImageStorage";
 import {
   fetchBookById,
@@ -170,6 +178,7 @@ function mockBooksFromSavedBookKeywords(
 
 export function MonthlyReportNewPage() {
   const { id: studentId } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [yearMonth, setYearMonth] = useState(() => {
     const fromUrl = parseYearMonthQuery(new URLSearchParams(window.location.search).get("ym"));
@@ -230,6 +239,9 @@ export function MonthlyReportNewPage() {
   const [aiBusy, setAiBusy] = useState(false);
   const [aiTokenUsage, setAiTokenUsage] = useState<MonthlyReportAITokenUsage | null>(null);
   const [saving, setSaving] = useState(false);
+  const [saveRedirectOpen, setSaveRedirectOpen] = useState(false);
+  const [exportReadOnly, setExportReadOnly] = useState(false);
+  const [exportBusy, setExportBusy] = useState<"jpg" | "pdf" | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   /** `?step=6` + 해당 `ym` 저장분 → 6단계 폼에 채움 (훅 순서: 모든 해당 `useState` 뒤) */
@@ -447,8 +459,7 @@ export function MonthlyReportNewPage() {
   const canGoNextFrom1 = growthMeta.step1.length > 0 && growthMeta.step2.length > 0;
   const canGoNextFrom2 = writingImages.length > 0;
   const canGoNextFrom3 = selectedBooks.length > 0;
-  const canGoNextFrom4 = KEYS.every((k) => pillarComments[k]?.trim());
-  const canGenerateFrom5 = warmDraft.trim().length > 0 && canGoNextFrom1 && canGoNextFrom2 && canGoNextFrom3 && canGoNextFrom4;
+  const canGenerateFrom5 = warmDraft.trim().length > 0 && canGoNextFrom1 && canGoNextFrom2 && canGoNextFrom3;
 
   const onPickFiles = useCallback(
     async (fileList: FileList | null) => {
@@ -568,6 +579,34 @@ export function MonthlyReportNewPage() {
     setWizardStep((s) => Math.max(1, s - 1));
   }
 
+  const reportTitleForExport = useMemo(() => reportHeaderTitle(yearMonth), [yearMonth]);
+
+  async function runMonthlyExport(format: "jpg" | "pdf") {
+    if (!growth.trim()) {
+      setMsg("보낼 내용이 없습니다. 먼저 리포트를 생성해 주세요.");
+      return;
+    }
+    setExportBusy(format);
+    setMsg(null);
+    setExportReadOnly(true);
+    try {
+      await new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      });
+      const base = monthlyReportExportFilename(reportTitleForExport, format);
+      if (format === "jpg") {
+        await downloadMonthlyReportJpg(MONTHLY_REPORT_EXPORT_ROOT_ID, base);
+      } else {
+        await downloadMonthlyReportPdf(MONTHLY_REPORT_EXPORT_ROOT_ID, base);
+      }
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    } finally {
+      setExportReadOnly(false);
+      setExportBusy(null);
+    }
+  }
+
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     if (!studentId) {
@@ -675,7 +714,7 @@ export function MonthlyReportNewPage() {
           }
         }
 
-        setMsg("저장되었습니다. 학생 상세로 돌아가 확인해 주세요.");
+        setSaveRedirectOpen(true);
         return;
       }
 
@@ -705,7 +744,7 @@ export function MonthlyReportNewPage() {
         weakness_cmt: safeCw.weakness_cmt,
         book_keywords: bookKeywordsPayload,
       });
-      setMsg("저장되었습니다. 학생 상세로 돌아가 확인해 주세요.");
+      setSaveRedirectOpen(true);
     } catch (err) {
       setMsg(err instanceof Error ? err.message : String(err));
     } finally {
@@ -967,7 +1006,7 @@ export function MonthlyReportNewPage() {
                           <img
                             src={b.cover_url}
                             alt={b.title ? `${b.title} 표지` : "선택 도서 표지"}
-                            className="h-[10.75rem] w-[6.5rem] rounded-lg border border-slate-200 object-cover shadow-sm"
+                            className={`${MONTHLY_REPORT_BOOK_COVER_IMG_CLASS} rounded-lg border border-slate-200 shadow-sm`}
                           />
                         ) : (
                           <div className="flex h-[10.75rem] w-[6.5rem] items-center justify-center rounded-lg border border-dashed border-slate-300 bg-white text-center text-[11px] text-slate-500">
@@ -1016,7 +1055,7 @@ export function MonthlyReportNewPage() {
 
         {wizardStep === 4 ? (
           <fieldset className="space-y-3 rounded-lg border border-slate-200 p-3">
-            <legend className="px-1 text-sm font-semibold text-slate-800">4. 5대 역량 (1~10점) 및 코멘트</legend>
+            <legend className="px-1 text-sm font-semibold text-slate-800">4. 5대 역량 (1~10점)</legend>
             <div className="grid grid-cols-1 gap-4">
               {KEYS.map((k) => (
                 <div key={k} className="rounded-lg border border-slate-100 bg-slate-50/50 p-3">
@@ -1032,7 +1071,7 @@ export function MonthlyReportNewPage() {
                   />
                   <p className="text-xs text-slate-500">{scores[k]}점</p>
                   <label className="mt-2 block text-xs text-slate-600">
-                    역량별 코멘트 (필수)
+                    역량별 코멘트 (선택)
                     <textarea
                       className="mt-1 min-h-[64px] w-full rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm"
                       value={pillarComments[k]}
@@ -1042,7 +1081,7 @@ export function MonthlyReportNewPage() {
                           [k]: e.target.value,
                         }))
                       }
-                      placeholder="수업에서 관찰한 내용을 적어 주세요."
+                      placeholder="관찰 내용이 있으면 적어 주세요. 비워 두어도 다음 단계로 진행할 수 있습니다."
                     />
                   </label>
                 </div>
@@ -1054,16 +1093,12 @@ export function MonthlyReportNewPage() {
               </button>
               <button
                 type="button"
-                disabled={!canGoNextFrom4}
                 onClick={goNext}
-                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
+                className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700"
               >
                 다음
               </button>
             </div>
-            {!canGoNextFrom4 ? (
-              <p className="text-xs text-amber-700">각 역량마다 코멘트를 한 글자 이상 입력해 주세요.</p>
-            ) : null}
           </fieldset>
         ) : null}
 
@@ -1095,7 +1130,7 @@ export function MonthlyReportNewPage() {
             </div>
             {!warmDraft.trim() ? (
               <p className="text-xs text-amber-700">한마디 초안을 입력해 주세요.</p>
-            ) : !canGoNextFrom1 || !canGoNextFrom2 || !canGoNextFrom3 || !canGoNextFrom4 ? (
+            ) : !canGoNextFrom1 || !canGoNextFrom2 || !canGoNextFrom3 ? (
               <p className="text-xs text-amber-700">앞 단계 입력이 모두 완료되어야 생성할 수 있습니다.</p>
             ) : null}
           </fieldset>
@@ -1118,7 +1153,7 @@ export function MonthlyReportNewPage() {
             </div>
 
             <MonthlyReportResultView
-              headerTitle={reportHeaderTitle(yearMonth)}
+              headerTitle={reportTitleForExport}
               growthText={growth}
               onGrowthChange={setGrowth}
               writingImageUrls={writingDisplayUrls}
@@ -1128,24 +1163,45 @@ export function MonthlyReportNewPage() {
               onCompetencyChange={setCompetencyAnalysis}
               teacherNote={teacherNote}
               onTeacherChange={setTeacherNote}
+              readOnly={exportReadOnly}
             />
 
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => setWizardStep(5)}
-                className="rounded-lg border border-slate-300 px-4 py-2 text-sm"
-              >
-                이전 단계로
-              </button>
-              <button
-                type="button"
-                disabled={aiBusy}
-                onClick={() => void runReportGeneration()}
-                className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-900 hover:bg-indigo-100 disabled:opacity-50"
-              >
-                {aiBusy ? "생성 중…" : "다시 생성하기"}
-              </button>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => setWizardStep(5)}
+                  className="rounded-lg border border-slate-300 px-4 py-2 text-sm"
+                >
+                  이전 단계로
+                </button>
+                <button
+                  type="button"
+                  disabled={aiBusy || Boolean(exportBusy)}
+                  onClick={() => void runReportGeneration()}
+                  className="rounded-lg border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-medium text-indigo-900 hover:bg-indigo-100 disabled:opacity-50"
+                >
+                  {aiBusy ? "생성 중…" : "다시 생성하기"}
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={Boolean(exportBusy) || aiBusy}
+                  onClick={() => void runMonthlyExport("jpg")}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {exportBusy === "jpg" ? "JPG 생성 중…" : "JPG로 다운받기"}
+                </button>
+                <button
+                  type="button"
+                  disabled={Boolean(exportBusy) || aiBusy}
+                  onClick={() => void runMonthlyExport("pdf")}
+                  className="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                >
+                  {exportBusy === "pdf" ? "PDF 생성 중…" : "PDF로 다운받기"}
+                </button>
+              </div>
             </div>
 
             <button
@@ -1160,6 +1216,19 @@ export function MonthlyReportNewPage() {
 
         {msg ? <p className="text-center text-sm text-slate-700">{msg}</p> : null}
       </form>
+
+      <MonthlyReportSaveRedirectDialog
+        open={saveRedirectOpen}
+        onClose={() => setSaveRedirectOpen(false)}
+        onGoStudentDetail={() => {
+          setSaveRedirectOpen(false);
+          if (studentId) navigate(`/students/${studentId}`, { replace: true });
+        }}
+        onGoStudentsList={() => {
+          setSaveRedirectOpen(false);
+          navigate("/students", { replace: true });
+        }}
+      />
     </div>
   );
 }

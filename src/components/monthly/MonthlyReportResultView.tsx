@@ -4,6 +4,10 @@ import {
   competencyAnalysisToMReportComments,
   joinCompetencyMReportComments,
 } from "../../lib/competencyAnalysisSplit";
+import {
+  MONTHLY_REPORT_BOOK_COVER_IMG_CLASS,
+  monthlyReportSectionPaddingStyle,
+} from "../../lib/monthlyReportLayout";
 
 export type RadarDatum = { subject: string; score: number };
 
@@ -130,7 +134,8 @@ export function ReportSection({
       </div>
 
       <div
-        className={`relative bg-white p-6 text-[15px] leading-relaxed text-gray-800 shadow-sm md:p-8 ${contentClassName}`}
+        className={`relative bg-white text-[15px] leading-relaxed text-gray-800 shadow-sm ${contentClassName}`}
+        style={monthlyReportSectionPaddingStyle()}
       >
         {children}
         <div className="absolute bottom-0 right-0 h-0 w-0 border-b-[20px] border-l-[20px] border-b-transparent border-l-gray-100/50" />
@@ -167,6 +172,8 @@ export type MonthlyReportResultViewProps = {
   teacherTitle?: string;
   teacherNote: string;
   onTeacherChange: (v: string) => void;
+  /** true면 수정 버튼·편집 UI 숨김 (JPG/PDF 캡처용) */
+  readOnly?: boolean;
 };
 
 export function MonthlyReportResultView({
@@ -185,6 +192,7 @@ export function MonthlyReportResultView({
   teacherTitle = "선생님의 따뜻한 한마디",
   teacherNote,
   onTeacherChange,
+  readOnly = false,
 }: MonthlyReportResultViewProps) {
   const [editingSection, setEditingSection] = useState<EditSection | null>(null);
   const [draftGrowth, setDraftGrowth] = useState("");
@@ -291,8 +299,11 @@ export function MonthlyReportResultView({
           <h1 className="relative z-10 text-3xl font-extrabold text-[#2a5b9c] md:text-4xl">{headerTitle}</h1>
         </div>
 
-        <ReportSection title={growthTitle} headerRight={sectionActions("growth", saveGrowth)}>
-          {editingSection === "growth" ? (
+        <ReportSection
+          title={growthTitle}
+          headerRight={readOnly ? undefined : sectionActions("growth", saveGrowth)}
+        >
+          {!readOnly && editingSection === "growth" ? (
             <textarea
               className={editTextareaClass + " min-h-[200px]"}
               value={draftGrowth}
@@ -327,12 +338,15 @@ export function MonthlyReportResultView({
               {writingUrls.map((imgUrl, index) => (
                 <div
                   key={index}
-                  className={`bg-gray-50 p-2 shadow-sm ${writingUrls.length === 1 ? "w-full max-w-sm border border-gray-100" : "w-1/2 min-w-[140px] flex-1 border border-gray-100"}`}
+                  className={`bg-gray-50 shadow-sm ${writingUrls.length === 1 ? "w-full max-w-sm border border-gray-100" : "w-1/2 min-w-[140px] flex-1 border border-gray-100"}`}
+                  style={monthlyReportSectionPaddingStyle()}
                 >
                   <img
                     src={imgUrl}
                     alt={`글쓰기 ${index + 1}`}
                     className="h-auto w-full object-cover"
+                    crossOrigin="anonymous"
+                    referrerPolicy="no-referrer"
                   />
                 </div>
               ))}
@@ -344,19 +358,19 @@ export function MonthlyReportResultView({
             className="mb-0 flex h-full flex-col"
             contentClassName="flex flex-1 flex-col justify-center"
           >
-            <div
-              className={`flex justify-center gap-4 ${displayBooks.length === 1 ? "flex-col items-center sm:flex-row" : "flex-wrap"}`}
-            >
+            <div className="flex flex-wrap justify-center gap-6">
               {displayBooks.map((item, index) => (
-                <div
-                  key={index}
-                  className={`flex flex-col items-center ${displayBooks.length === 1 ? "w-full max-w-sm" : "w-1/2 min-w-[140px] flex-1"}`}
-                >
-                  <div className="w-full border border-gray-100 bg-gray-50 p-2 shadow-sm">
+                <div key={index} className="flex shrink-0 flex-col items-center">
+                  <div
+                    className="inline-block border border-gray-100 bg-gray-50 shadow-sm"
+                    style={monthlyReportSectionPaddingStyle()}
+                  >
                     <img
                       src={item.image}
                       alt={`도서 ${index + 1}`}
-                      className={`mx-auto w-full object-contain ${displayBooks.length === 1 ? "max-h-[220px]" : "max-h-[130px]"}`}
+                      className={MONTHLY_REPORT_BOOK_COVER_IMG_CLASS}
+                      crossOrigin="anonymous"
+                      referrerPolicy="no-referrer"
                     />
                   </div>
                   <div className="mt-2 flex flex-wrap justify-center gap-1.5">
@@ -372,8 +386,11 @@ export function MonthlyReportResultView({
           </ReportSection>
         </div>
 
-        <ReportSection title={analysisTitle} headerRight={sectionActions("analysis", saveAnalysis)}>
-          {editingSection === "analysis" ? (
+        <ReportSection
+          title={analysisTitle}
+          headerRight={readOnly ? undefined : sectionActions("analysis", saveAnalysis)}
+        >
+          {!readOnly && editingSection === "analysis" ? (
             <div className="space-y-6">
               <div className="flex justify-center md:justify-start">
                 <PolygonRadarChart data={radarData} />
@@ -423,8 +440,11 @@ export function MonthlyReportResultView({
           )}
         </ReportSection>
 
-        <ReportSection title={teacherTitle} headerRight={sectionActions("teacher", saveTeacher)}>
-          {editingSection === "teacher" ? (
+        <ReportSection
+          title={teacherTitle}
+          headerRight={readOnly ? undefined : sectionActions("teacher", saveTeacher)}
+        >
+          {!readOnly && editingSection === "teacher" ? (
             <textarea
               className={editTextareaClass + " min-h-[140px]"}
               value={draftTeacher}

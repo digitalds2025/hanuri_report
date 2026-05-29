@@ -9,6 +9,12 @@ import {
 } from "./reportStudentPrivacy";
 import { stripAiPlainText } from "./reportPlainText";
 import {
+  COMPETENCY_STRENGTH_MAX_CHARS,
+  COMPETENCY_WEAKNESS_MAX_CHARS,
+  competencyAnalysisEditorRulesBlock,
+  enforceCompetencyAnalysisLimits,
+} from "./competencyAnalysisTextRules";
+import {
   enforceGrowthMomentParagraphLimits,
   growthMomentEditorRulesBlock,
 } from "./growthMomentTextRules";
@@ -182,29 +188,23 @@ ${growthMomentEditorRulesBlock()}
 }
 
 function promptCompetency(ctx: MonthlyReportAIContext, privacy?: ReportPrivacyContext): string {
-  return `당신은 초등·중학 연령 독서 논술 학원의 교육 전문가입니다.
+  return `${competencyAnalysisEditorRulesBlock()}
 
 ${REPORT_NO_PII_PROMPT_RULES}
 
+# [제공 데이터]
 아래는 한 학생의 이번 달 **전체 입력**입니다. 이것만 근거로 분석하세요.
 
 ${contextBlock(ctx, privacy)}
 
-작업: **관찰 기반 역량 종합 분석** 텍스트만 작성합니다.
-
-형식(반드시 준수):
-- 마크다운(예: #, ##, **, 불릿)을 쓰지 마세요. 아래 **[강점]** / **[보완점]** 라벨만 예외로 그대로 씁니다.
-- 백슬래시나 '\\n' 같은 이스케이프 문자열을 출력하지 마세요.
-- **강점과 보완을 한 문단에 섞지 마세요.** 「한편,」「반면,」으로 한 덩어리에 이어 쓰지 말고, 반드시 아래 두 블록으로 나눕니다.
+# [작업]
+**관찰 기반 역량 종합 분석**만 작성하세요. 출력 형식 예시(본문 길이는 위 상한 준수):
 
 [강점]
-(이 블록에는 강점·칭찬·기대만. 점수·코멘트 근거로 가장 두드러진 역량 하나에 집중. 보완·아쉬운 점·집에서 할 일은 쓰지 마세요.)
+(강점 본문 — ${COMPETENCY_STRENGTH_MAX_CHARS}자 이하)
 
 [보완점]
-(이 블록에는 보완이 필요한 역량 하나와 학부모가 집에서 도울 수 있는 짧은 실천만. 강점 내용을 반복하지 마세요. 과장·낙인 금지.)
-
-- [강점]과 [보완점] 사이에는 빈 줄을 하나 넣어도 되고, 넣지 않아도 됩니다.
-- 레이더 차트는 별도로 그려지므로 차트 언급 없이 텍스트만 작성합니다.`;
+(보완 본문 — ${COMPETENCY_WEAKNESS_MAX_CHARS}자 이하)`;
 }
 
 function promptWarm(ctx: MonthlyReportAIContext, privacy?: ReportPrivacyContext): string {
@@ -236,10 +236,14 @@ export async function generateMonthlyReportBundle(
     const r = await geminiGenerateText(prompt, 0.4);
     return r.text;
   });
+  const competencyLimited = await enforceCompetencyAnalysisLimits(competencyRes.text, async (prompt) => {
+    const r = await geminiGenerateText(prompt, 0.4);
+    return r.text;
+  });
   const parts = [growthRes, competencyRes, warmRes];
   return {
     growthMoment: applyReportPrivacy(growthLimited, privacy),
-    competencyAnalysis: applyReportPrivacy(competencyRes.text, privacy),
+    competencyAnalysis: applyReportPrivacy(competencyLimited, privacy),
     warmMessage: applyReportPrivacy(warmRes.text, privacy),
     tokenUsage: {
       inputTokens: parts.reduce((sum, p) => sum + p.promptTokenCount, 0),

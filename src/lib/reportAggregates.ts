@@ -9,10 +9,10 @@ export type PillarScores = Partial<Record<PillarKey, number>>;
 
 export const pillarLabelsKo: Record<PillarKey, string> = {
   reading: "독서 몰입·이해",
-  thinking: "생각의 깊이",
-  discussion: "어휘·대화",
-  writing: "글쓰기·끈기",
-  growth: "참여·학습 의지",
+  thinking: "논리적 사고",
+  discussion: "언어·토론 태도",
+  writing: "글쓰기 완성도",
+  growth: "학습 의지·참여",
 };
 
 /** competency_ratings JSON (신 5키 또는 구 6키) → 1~10 스케일로 정규화 */

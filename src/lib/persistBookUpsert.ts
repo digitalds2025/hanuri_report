@@ -4,6 +4,7 @@ import {
   ensureQualityBookAiMetadata,
   parseYes24CategoryForAiCategory,
 } from "./bookAiMetadataParse";
+import { ensureBookCoverInStorage, isBookCoverStorageUrl } from "./bookCoverStorage";
 import { fetchBookByTitleExact } from "./fetchBookByTitle";
 import { localUpsertBook, type Yes24SearchResultPayload } from "./localStoreApi";
 import { isSupabaseConfigured, supabase } from "./supabaseClient";
@@ -28,6 +29,8 @@ export type BookUpsertInput = {
   publisher: string;
   url: string | null;
   cover_url: string | null;
+  /** YES24 수집 직후 1회 — Storage 업로드 후 DB에는 저장하지 않음 */
+  cover_jpeg_base64?: string | null;
   category: string | null;
   introduce: string | null;
   author_cmt: string | null;
@@ -50,6 +53,7 @@ export function bookUpsertInputFromYes24(r: Yes24SearchResultPayload): BookUpser
     publisher: r.publisher.trim(),
     url: r.url.trim() || null,
     cover_url: (r.cover_url ?? "").trim() || null,
+    cover_jpeg_base64: r.cover_jpeg_base64 ?? null,
     category: (r.category ?? "").trim() || null,
     introduce: (r.introduce ?? "").trim() || null,
     author_cmt: (r.author_cmt ?? "").trim() || null,
@@ -77,12 +81,14 @@ export async function persistBookUpsertRow(row: BookUpsertInput): Promise<Persis
     parseYes24CategoryForAiCategory(existing?.category) ||
     null;
 
+  let cover_url = row.cover_url?.trim() || existing?.cover_url?.trim() || null;
+
   const payload = {
     title: row.title.trim(),
     author: row.author.trim(),
     publisher: row.publisher.trim(),
     url: row.url?.trim() || null,
-    cover_url: row.cover_url?.trim() || null,
+    cover_url,
     category: row.category?.trim() || null,
     introduce: row.introduce?.trim() || null,
     author_cmt: row.author_cmt?.trim() || null,
@@ -92,8 +98,30 @@ export async function persistBookUpsertRow(row: BookUpsertInput): Promise<Persis
   };
 
   if (isSupabaseConfigured()) {
-    if (!supabase) return { ok: false, error: "Supabase 클라이언트가 없습니다." };
-    const { data, error } = await supabase
+    const client = supabase;
+    if (!client) return { ok: false, error: "Supabase 클라이언트가 없습니다." };
+
+    if (cover_url || row.cover_jpeg_base64) {
+      try {
+        const stored = await ensureBookCoverInStorage(client, {
+          coverUrl: cover_url,
+          coverJpegBase64: row.cover_jpeg_base64,
+          title: payload.title,
+          author: payload.author,
+          publisher: payload.publisher,
+        });
+        if (stored) payload.cover_url = stored;
+        else if (payload.cover_url && !isBookCoverStorageUrl(payload.cover_url)) {
+          const prev = existing?.cover_url?.trim();
+          payload.cover_url = prev && isBookCoverStorageUrl(prev) ? prev : null;
+        }
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        return { ok: false, error: `표지 Storage 업로드 실패: ${msg}` };
+      }
+    }
+
+    const { data, error } = await client
       .from("books")
       .upsert(payload, { onConflict: "title,author,publisher" })
       .select("id")

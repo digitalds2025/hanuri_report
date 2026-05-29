@@ -145,6 +145,7 @@ export type Yes24SearchResultPayload = {
   publisher: string;
   url: string;
   cover_url: string | null;
+  cover_jpeg_base64?: string | null;
   category: string | null;
   introduce: string | null;
   author_cmt: string | null;

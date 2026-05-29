@@ -151,11 +151,11 @@ JSON만 출력하세요. 키는 정확히 아래와 같습니다.
 
 {
   "score_overview": "레이더 차트 옆 본문. 2문단(문단 사이 \\n\\n). 3~4회차 구간과 5~6회차 구간 성장 흐름을 자연스럽게 서술. 숫자·점수·별점 금지.",
-  "score_reading_desc": "독서 몰입·이해 — 한 문장, '높은 편'·'꾸준히 상승' 등 자연어",
-  "score_thinking_desc": "생각의 깊이 — 한 문장",
-  "score_discussion_desc": "어휘·대화 — 한 문장",
-  "score_writing_desc": "글쓰기·끈기 — 한 문장",
-  "score_growth_desc": "참여·학습 의지 — 한 문장",
+  "score_reading_desc": "${pillarLabelsKo.reading} — 한 문장, '높은 편'·'꾸준히 상승' 등 자연어",
+  "score_thinking_desc": "${pillarLabelsKo.thinking} — 한 문장",
+  "score_discussion_desc": "${pillarLabelsKo.discussion} — 한 문장",
+  "score_writing_desc": "${pillarLabelsKo.writing} — 한 문장",
+  "score_growth_desc": "${pillarLabelsKo.growth} — 한 문장",
   "gauge_high_desc": "집중 성취 포인트 게이지용 1~2문장(숫자 금지)",
   "gauge_low_desc": "향후 강화 포인트 게이지용 1~2문장(숫자 금지, 격려 톤)"
 }
