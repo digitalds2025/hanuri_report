@@ -122,6 +122,105 @@ function sanitizeInlineStyleAttr(el: Element, doc: Document): void {
 
 type StyleBackup = { el: HTMLStyleElement; text: string };
 
+type StylesheetLinkBackup = {
+  el: HTMLLinkElement;
+  parent: Node;
+  next: ChildNode | null;
+};
+
+type PageStylesheetSwapBackup = {
+  links: StylesheetLinkBackup[];
+  styles: StyleBackup[];
+  injected: HTMLStyleElement | null;
+};
+
+/** Vite 프로덕션 빌드는 CSS를 `<link>`로 넣음 — html2canvas는 여기서 oklch를 그대로 읽어 실패함 */
+export async function collectDocumentStylesheetCss(doc: Document): Promise<string> {
+  const chunks: string[] = [];
+
+  for (const link of doc.querySelectorAll('link[rel="stylesheet"]')) {
+    if (!(link instanceof HTMLLinkElement)) continue;
+    const href = link.href;
+    if (!href) continue;
+    try {
+      const res = await fetch(href, { credentials: "omit" });
+      if (res.ok) {
+        chunks.push(await res.text());
+        continue;
+      }
+    } catch {
+      /* fetch 실패 시 styleSheets API 시도 */
+    }
+    try {
+      for (const sheet of Array.from(doc.styleSheets)) {
+        if (sheet.href !== href) continue;
+        for (const rule of Array.from(sheet.cssRules)) {
+          chunks.push(rule.cssText);
+        }
+      }
+    } catch {
+      /* cross-origin 등 */
+    }
+  }
+
+  for (const node of doc.querySelectorAll("style")) {
+    if (node instanceof HTMLStyleElement) {
+      chunks.push(node.textContent ?? "");
+    }
+  }
+
+  return chunks.join("\n");
+}
+
+export function buildSanitizedExportCss(rawCss: string, doc: Document): string {
+  return sanitizeCssText(rawCss, doc);
+}
+
+function swapPageStylesheets(doc: Document, sanitizedCss: string): PageStylesheetSwapBackup {
+  const backup: PageStylesheetSwapBackup = { links: [], styles: [], injected: null };
+
+  for (const link of doc.querySelectorAll('link[rel="stylesheet"]')) {
+    if (!(link instanceof HTMLLinkElement) || !link.parentNode) continue;
+    backup.links.push({ el: link, parent: link.parentNode, next: link.nextSibling });
+    link.remove();
+  }
+
+  for (const node of doc.querySelectorAll("style")) {
+    if (!(node instanceof HTMLStyleElement) || node.hasAttribute("data-hanuri-export-css")) continue;
+    backup.styles.push({ el: node, text: node.textContent ?? "" });
+    node.remove();
+  }
+
+  const injected = doc.createElement("style");
+  injected.setAttribute("data-hanuri-export-css", "");
+  injected.textContent = sanitizedCss;
+  doc.head.appendChild(injected);
+  backup.injected = injected;
+
+  return backup;
+}
+
+function restorePageStylesheets(doc: Document, backup: PageStylesheetSwapBackup): void {
+  backup.injected?.remove();
+  for (const { el, parent, next } of backup.links) {
+    parent.insertBefore(el, next);
+  }
+  for (const { el, text } of backup.styles) {
+    el.textContent = text;
+    if (!el.parentNode) doc.head.appendChild(el);
+  }
+}
+
+/** html2canvas 클론 — 외부 stylesheet 링크 제거 후 sanitize된 CSS만 주입 */
+export function installSanitizedStylesInClone(clonedDoc: Document, sanitizedCss: string): void {
+  clonedDoc.querySelectorAll('link[rel="stylesheet"]').forEach((node) => node.remove());
+  clonedDoc.querySelectorAll("style").forEach((node) => node.remove());
+  const style = clonedDoc.createElement("style");
+  style.setAttribute("data-hanuri-export-css", "");
+  style.textContent = sanitizedCss;
+  clonedDoc.head.appendChild(style);
+}
+
 const TEXT_PAINT_PROPS = [
   "font-size",
   "font-weight",
@@ -471,10 +570,15 @@ export function prepareHtml2CanvasClone(
   clonedDoc: Document,
   sourceRoot: HTMLElement | null,
   cloneRoot: HTMLElement | null,
+  sanitizedCss?: string,
 ): void {
-  clonedDoc.querySelectorAll("style").forEach((node) => {
-    if (node instanceof HTMLStyleElement) sanitizeStyleElement(node, clonedDoc);
-  });
+  if (sanitizedCss) {
+    installSanitizedStylesInClone(clonedDoc, sanitizedCss);
+  } else {
+    clonedDoc.querySelectorAll("style").forEach((node) => {
+      if (node instanceof HTMLStyleElement) sanitizeStyleElement(node, clonedDoc);
+    });
+  }
 
   if (cloneRoot) {
     const nodes = [cloneRoot, ...cloneRoot.querySelectorAll("*")];
@@ -502,18 +606,24 @@ export function withSanitizedStylesForCapture<T>(
   doc: Document,
   exportRoot: HTMLElement | null,
   run: () => Promise<T> | T,
+  sanitizedCss?: string,
 ): Promise<T> {
   const styleBackups: StyleBackup[] = [];
   const inlineBackups: { el: HTMLElement; style: string | null }[] = [];
   let textPaintSaved: Map<Element, TextPaintBackup> | null = null;
   let captureBoxMarks: CaptureBoxMarkBackup[] = [];
+  let pageStylesBackup: PageStylesheetSwapBackup | null = null;
 
-  doc.querySelectorAll("style").forEach((node) => {
-    if (!(node instanceof HTMLStyleElement)) return;
-    const text = node.textContent ?? "";
-    styleBackups.push({ el: node, text });
-    sanitizeStyleElement(node, doc);
-  });
+  if (sanitizedCss) {
+    pageStylesBackup = swapPageStylesheets(doc, sanitizedCss);
+  } else {
+    doc.querySelectorAll("style").forEach((node) => {
+      if (!(node instanceof HTMLStyleElement)) return;
+      const text = node.textContent ?? "";
+      styleBackups.push({ el: node, text });
+      sanitizeStyleElement(node, doc);
+    });
+  }
 
   if (exportRoot) {
     captureBoxMarks = autoMarkReportCaptureBoxes(exportRoot);
@@ -530,8 +640,12 @@ export function withSanitizedStylesForCapture<T>(
   }
 
   const finish = (): void => {
-    for (const { el, text } of styleBackups) {
-      el.textContent = text;
+    if (pageStylesBackup) {
+      restorePageStylesheets(doc, pageStylesBackup);
+    } else {
+      for (const { el, text } of styleBackups) {
+        el.textContent = text;
+      }
     }
     for (const { el, style } of inlineBackups) {
       if (style === null) el.removeAttribute("style");

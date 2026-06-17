@@ -1,6 +1,11 @@
 import html2canvas from "html2canvas";
 import { jsPDF } from "jspdf";
-import { prepareHtml2CanvasClone, withSanitizedStylesForCapture } from "./html2canvasPrepareClone";
+import {
+  buildSanitizedExportCss,
+  collectDocumentStylesheetCss,
+  prepareHtml2CanvasClone,
+  withSanitizedStylesForCapture,
+} from "./html2canvasPrepareClone";
 
 export const MONTHLY_REPORT_EXPORT_ROOT_ID = "hanuri-export-root";
 
@@ -84,25 +89,37 @@ async function captureRootCanvas(rootId: string): Promise<HTMLCanvasElement> {
     requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
   });
 
-  return withSanitizedStylesForCapture(document, el, async () => {
-    return html2canvas(el, {
-      scale: CAPTURE_SCALE,
-      useCORS: true,
-      allowTaint: false,
-      backgroundColor: "#eaf1f9",
-      logging: false,
-      /** Tailwind lg/md 판정을 화면과 동일하게 */
-      windowWidth: viewportW,
-      windowHeight: viewportH,
-      onclone: (clonedDoc, clonedElement) => {
-        const cloneRoot =
-          clonedElement instanceof HTMLElement
-            ? clonedElement
-            : clonedDoc.getElementById(rootId);
-        prepareHtml2CanvasClone(clonedDoc, sourceEl, cloneRoot instanceof HTMLElement ? cloneRoot : null);
-      },
-    });
-  });
+  const rawCss = await collectDocumentStylesheetCss(document);
+  const sanitizedCss = buildSanitizedExportCss(rawCss, document);
+
+  return withSanitizedStylesForCapture(
+    document,
+    el,
+    async () =>
+      html2canvas(el, {
+        scale: CAPTURE_SCALE,
+        useCORS: true,
+        allowTaint: false,
+        backgroundColor: "#eaf1f9",
+        logging: false,
+        /** Tailwind lg/md 판정을 화면과 동일하게 */
+        windowWidth: viewportW,
+        windowHeight: viewportH,
+        onclone: (clonedDoc, clonedElement) => {
+          const cloneRoot =
+            clonedElement instanceof HTMLElement
+              ? clonedElement
+              : clonedDoc.getElementById(rootId);
+          prepareHtml2CanvasClone(
+            clonedDoc,
+            sourceEl,
+            cloneRoot instanceof HTMLElement ? cloneRoot : null,
+            sanitizedCss,
+          );
+        },
+      }),
+    sanitizedCss,
+  );
 }
 
 /** 캔버스를 A4 가로·세로 안에 맞춘 mm 크기 (비율 유지) */
