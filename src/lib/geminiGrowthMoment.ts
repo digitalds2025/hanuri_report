@@ -25,7 +25,7 @@ function getApiKey(): string {
 
 function getModel(): string {
   const m = (import.meta.env.VITE_GEMINI_MODEL as string | undefined)?.trim();
-  return m || "gemini-2.0-flash";
+  return m || "gemini-2.5-flash";
 }
 
 async function callGeminiText(prompt: string, temperature: number): Promise<string> {

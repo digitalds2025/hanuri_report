@@ -51,7 +51,10 @@ jobs:
           VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
           VITE_GEMINI_API_KEY: ${{ secrets.VITE_GEMINI_API_KEY }}
-          VITE_GEMINI_MODEL: ${{ secrets.VITE_GEMINI_MODEL }}
+          VITE_GEMINI_MODEL: ${{ secrets.VITE_GEMINI_MODEL || 'gemini-2.5-flash' }}
+          VITE_GEMINI_RESEARCH_MODEL: ${{ secrets.VITE_GEMINI_RESEARCH_MODEL || 'gemini-2.5-flash' }}
+          VITE_GEMINI_WRITER_MODEL: ${{ secrets.VITE_GEMINI_WRITER_MODEL || 'gemini-3.5-flash' }}
+          VITE_GEMINI_SCAN_MODEL: ${{ secrets.VITE_GEMINI_SCAN_MODEL || 'gemini-3.5-flash' }}
           VITE_SUPABASE_STORAGE_WRITING_BUCKET: ${{ secrets.VITE_SUPABASE_STORAGE_WRITING_BUCKET }}
           VITE_YES24_API_URL: ${{ secrets.VITE_YES24_API_URL }}
           VITE_YES24_API_KEY: ${{ secrets.VITE_YES24_API_KEY }}

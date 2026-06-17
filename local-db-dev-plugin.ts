@@ -569,7 +569,7 @@ export function localDbDevPlugin(): Plugin {
       const root = server.config.root;
       const env = loadEnv(server.config.mode, root, "");
       const geminiApiKey = (env.VITE_GEMINI_API_KEY ?? "").trim();
-      const geminiModel = (env.VITE_GEMINI_MODEL ?? "gemini-2.0-flash").trim();
+      const geminiModel = (env.VITE_GEMINI_MODEL ?? "gemini-2.5-flash").trim();
       /** YES24 Playwright: 기본은 창 없음(헤드리스). 막힐 때만 `.env`에 `YES24_PLAYWRIGHT_HEADED=1` */
       const yes24PlaywrightHeaded = false;
 

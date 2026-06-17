@@ -11,7 +11,7 @@ import express from "express";
 const PORT = Number(process.env.PORT) || 8080;
 const apiSecret = (process.env.YES24_API_SECRET ?? "").trim();
 const geminiKey = (process.env.GEMINI_API_KEY ?? "").trim();
-const geminiModel = (process.env.GEMINI_MODEL ?? "gemini-2.0-flash").trim();
+const geminiModel = (process.env.GEMINI_MODEL ?? "gemini-2.5-flash").trim();
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ?? "")
   .split(",")
