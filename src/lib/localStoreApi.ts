@@ -1,5 +1,4 @@
 import { YES24_CLOUD_RUN_API_KEY, YES24_CLOUD_RUN_BASE_URL } from "../config/yes24CloudRun";
-import type { BriefingMaterialKit } from "./briefingMaterialTypes";
 import type { Book, Json, MonthlyReport, Student } from "./types/database";
 
 function yes24RemoteBaseUrl(): string {
@@ -248,6 +247,8 @@ export async function localUpsertBook(row: {
   pub_cmt?: string | null;
   ai_category?: string | null;
   ai_keywords: Json;
+  registered_by_user_id?: string | null;
+  literature?: number | null;
 }): Promise<string> {
   const res = await localFetch("/api/local/books/upsert", {
     method: "POST",
@@ -264,23 +265,11 @@ export async function localUpsertBook(row: {
       pub_cmt: row.pub_cmt ?? null,
       ai_category: row.ai_category ?? null,
       ai_keywords: row.ai_keywords,
+      registered_by_user_id: row.registered_by_user_id ?? null,
+      literature: row.literature ?? null,
     }),
   });
   const j = await parseJson<{ id?: string }>(res);
   if (!j.id || typeof j.id !== "string") throw new Error("로컬 books upsert 응답에 id가 없습니다.");
   return j.id;
-}
-
-export async function localListBriefingKits(): Promise<BriefingMaterialKit[]> {
-  const res = await localFetch("/api/local/briefing-kits");
-  return parseJson<BriefingMaterialKit[]>(res);
-}
-
-export async function localSaveBriefingKit(kit: BriefingMaterialKit): Promise<void> {
-  const res = await localFetch("/api/local/briefing-kits", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(kit),
-  });
-  await parseJson<unknown>(res);
 }

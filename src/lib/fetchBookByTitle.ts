@@ -146,7 +146,11 @@ function bookMatchesQuery(b: Book, low: string): boolean {
 }
 
 /** 제목·저자·출판사 부분 일치(대소문자 무시)로 최대 `limit`건 */
-export async function searchBooksByQuery(q: string, limit = 30): Promise<Book[]> {
+export async function searchBooksByQuery(
+  q: string,
+  limit = 30,
+  opts?: { registeredByUserId?: string | null },
+): Promise<Book[]> {
   const t = q.trim();
   if (!t) return [];
 
@@ -154,18 +158,27 @@ export async function searchBooksByQuery(q: string, limit = 30): Promise<Book[]>
     if (!supabase) return [];
     const escaped = t.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
     const pattern = `%${escaped}%`;
-    const { data, error } = await supabase
+    let query = supabase
       .from("books")
       .select("*")
       .or(`title.ilike.${pattern},author.ilike.${pattern},publisher.ilike.${pattern}`)
       .order("created_at", { ascending: false })
       .limit(limit);
+    const ownerId = opts?.registeredByUserId?.trim();
+    if (ownerId) {
+      query = query.eq("registered_by_user_id", ownerId);
+    }
+    const { data, error } = await query;
     if (error) throw new Error(error.message);
     return data ?? [];
   }
 
   if (import.meta.env.DEV) {
-    const list = await localListBooks();
+    let list = await localListBooks();
+    const ownerId = opts?.registeredByUserId?.trim();
+    if (ownerId) {
+      list = list.filter((b) => b.registered_by_user_id === ownerId);
+    }
     const low = t.toLowerCase();
     return list.filter((b) => bookMatchesQuery(b, low)).slice(0, limit);
   }

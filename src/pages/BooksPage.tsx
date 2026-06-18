@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../auth/AuthContext";
 import { HanuriBookSearchPanel, type BookSearchHit } from "../components/books/HanuriBookSearchPanel";
+import { useBookCatalogScope } from "../lib/bookCatalogAccess";
 import { isSupabaseConfigured, supabase } from "../lib/supabaseClient";
 import { bookAiKeywordsFromRow, fetchBookById } from "../lib/fetchBookByTitle";
 import { localListBooks } from "../lib/localStoreApi";
@@ -10,6 +11,10 @@ import type { Book } from "../lib/types/database";
 
 export function BooksPage() {
   const { user } = useAuth();
+  const { canRegisterBooks, catalogOwnerUserId, catalogFilterReady, registerAsUserId } = useBookCatalogScope(
+    user?.login_id,
+    user?.user_id,
+  );
   const [books, setBooks] = useState<Book[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -38,7 +43,13 @@ export function BooksPage() {
           setErr("저장소 연결이 설정되지 않았습니다.");
           return;
         }
-        const { data, error } = await supabase.from("books").select("*").order("created_at", { ascending: false });
+        const { data, error } = await (catalogOwnerUserId
+          ? supabase
+              .from("books")
+              .select("*")
+              .eq("registered_by_user_id", catalogOwnerUserId)
+              .order("created_at", { ascending: false })
+          : supabase.from("books").select("*").order("created_at", { ascending: false }));
         if (error) setErr(error.message);
         else {
           setErr(null);
@@ -53,7 +64,11 @@ export function BooksPage() {
       }
       const list = await localListBooks();
       setErr(null);
-      setBooks(list);
+      setBooks(
+        catalogOwnerUserId
+          ? list.filter((b) => b.registered_by_user_id === catalogOwnerUserId)
+          : list,
+      );
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setBooks([]);
@@ -63,8 +78,9 @@ export function BooksPage() {
   }
 
   useEffect(() => {
+    if (!catalogFilterReady) return;
     void load();
-  }, []);
+  }, [catalogOwnerUserId, catalogFilterReady]);
 
   async function openBookFromHit(hit: BookSearchHit) {
     const id = hit.dbBookId?.trim();
@@ -87,6 +103,9 @@ export function BooksPage() {
       <section className="max-w-2xl rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
         <h2 className="mb-4 text-sm font-semibold text-slate-800">도서 찾기</h2>
         <HanuriBookSearchPanel
+          allowManualRegister={canRegisterBooks}
+          catalogOwnerUserId={catalogOwnerUserId}
+          registerAsUserId={registerAsUserId}
           onResultClick={(hit) => void openBookFromHit(hit)}
           onYes24Success={(hit) => {
             void (async () => {
@@ -101,7 +120,7 @@ export function BooksPage() {
         <div className="border-b border-slate-100 px-4 py-3">
           <h2 className="text-sm font-semibold text-slate-800">등록된 도서</h2>
         </div>
-        {loading ? (
+        {loading || !catalogFilterReady ? (
           <p className="p-4 text-sm text-slate-500">불러오는 중…</p>
         ) : books.length === 0 ? (
           <p className="p-4 text-sm text-slate-500">데이터가 없습니다.</p>

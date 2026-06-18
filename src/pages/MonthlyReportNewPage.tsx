@@ -1,5 +1,6 @@
 import { type FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { useAuth } from "../auth/AuthContext";
 import { GrowthMomentForm } from "../components/monthly/GrowthMomentForm";
 import {
   HanuriBookSearchPanel,
@@ -38,6 +39,7 @@ import {
 } from "../lib/fetchBookByTitle";
 import type { MonthlyReportBookContext } from "../lib/geminiMonthlyBundle";
 import { localSaveMonthlyReport } from "../lib/localStoreApi";
+import { useBookCatalogScope } from "../lib/bookCatalogAccess";
 import { pickStrengthWeaknessPointsForReport } from "../lib/pillarStrengthWeakness";
 import { stripAiPlainText } from "../lib/reportPlainText";
 import {
@@ -177,6 +179,8 @@ function mockBooksFromSavedBookKeywords(
 export function MonthlyReportNewPage() {
   const { id: studentId } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const { catalogOwnerUserId } = useBookCatalogScope(user?.login_id, user?.user_id);
   const [searchParams] = useSearchParams();
   const [yearMonth, setYearMonth] = useState(() => {
     const fromUrl = parseYearMonthQuery(new URLSearchParams(window.location.search).get("ym"));
@@ -940,6 +944,8 @@ export function MonthlyReportNewPage() {
             <div className="flex flex-col gap-5 lg:flex-row lg:items-stretch">
               <div className="min-w-0 flex-1">
                 <HanuriBookSearchPanel
+                  allowManualRegister={false}
+                  catalogOwnerUserId={catalogOwnerUserId}
                   onResultClick={(hit) => void toggleResultBookSelection(searchHitToMockBook(hit))}
                   isResultSelected={isBookSearchHitSelected}
                   isResultClickDisabled={(hit) =>

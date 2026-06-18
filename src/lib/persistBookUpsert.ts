@@ -6,6 +6,7 @@ import {
 } from "./bookAiMetadataParse";
 import { ensureBookCoverInStorage, isBookCoverStorageUrl } from "./bookCoverStorage";
 import { fetchBookByTitleExact } from "./fetchBookByTitle";
+import { classifyBookLiterature, inferLiteratureFromCategory } from "./geminiBookLiterature";
 import { localUpsertBook, type Yes24SearchResultPayload } from "./localStoreApi";
 import { isSupabaseConfigured, supabase } from "./supabaseClient";
 import type { Json } from "./types/database";
@@ -68,7 +69,10 @@ export type PersistBookUpsertResult =
   | { ok: false; error: string };
 
 /** Supabase `books`가 있으면 upsert, 없으면 개발 모드에서만 로컬 파일 DB upsert */
-export async function persistBookUpsertRow(row: BookUpsertInput): Promise<PersistBookUpsertResult> {
+export async function persistBookUpsertRow(
+  row: BookUpsertInput,
+  registeredByUserId?: string | null,
+): Promise<PersistBookUpsertResult> {
   const existing = await fetchBookByTitleExact(row.title.trim());
   const incomingKw = bookAiKeywordsFromJson(normalizeAiKeywordsForBooksTable(row.ai_keywords));
   const keptKw = incomingKw.length > 0 ? incomingKw : bookAiKeywordsFromJson(existing?.ai_keywords);
@@ -83,18 +87,37 @@ export async function persistBookUpsertRow(row: BookUpsertInput): Promise<Persis
 
   let cover_url = row.cover_url?.trim() || existing?.cover_url?.trim() || null;
 
+  const category = row.category?.trim() || existing?.category?.trim() || null;
+  const introduce = row.introduce?.trim() || existing?.introduce?.trim() || null;
+  const author_cmt = row.author_cmt?.trim() || existing?.author_cmt?.trim() || null;
+  const pub_cmt = row.pub_cmt?.trim() || existing?.pub_cmt?.trim() || null;
+
+  let literature: 0 | 1 | null =
+    existing?.literature === 0 || existing?.literature === 1 ? existing.literature : null;
+  if (literature === null) {
+    try {
+      literature = await classifyBookLiterature({ category, introduce, author_cmt, pub_cmt });
+    } catch {
+      literature = inferLiteratureFromCategory(category);
+    }
+  }
+
   const payload = {
     title: row.title.trim(),
     author: row.author.trim(),
     publisher: row.publisher.trim(),
     url: row.url?.trim() || null,
     cover_url,
-    category: row.category?.trim() || null,
-    introduce: row.introduce?.trim() || null,
-    author_cmt: row.author_cmt?.trim() || null,
-    pub_cmt: row.pub_cmt?.trim() || null,
+    category,
+    introduce,
+    author_cmt,
+    pub_cmt,
     ai_category,
     ai_keywords,
+    literature,
+    ...(!existing?.registered_by_user_id && registeredByUserId?.trim()
+      ? { registered_by_user_id: registeredByUserId.trim() }
+      : {}),
   };
 
   if (isSupabaseConfigured()) {
@@ -131,7 +154,10 @@ export async function persistBookUpsertRow(row: BookUpsertInput): Promise<Persis
     return { ok: true, via: "supabase", book_id: data.id };
   }
   if (import.meta.env.DEV) {
-    const book_id = await localUpsertBook(payload);
+    const book_id = await localUpsertBook({
+      ...payload,
+      registered_by_user_id: payload.registered_by_user_id ?? registeredByUserId?.trim() ?? null,
+    });
     return { ok: true, via: "local", book_id };
   }
   return {

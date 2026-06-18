@@ -38,6 +38,8 @@ type Book = {
   pub_cmt: string | null;
   ai_category: string | null;
   ai_keywords: Json;
+  registered_by_user_id: string | null;
+  literature: number | null;
   created_at: string;
 };
 
@@ -145,16 +147,6 @@ type LegacyMonthly = {
   created_at: string;
 };
 
-type LocalBriefingKit = {
-  id: string;
-  title: string;
-  created_at: string;
-  reference_text: string;
-  meta: Json;
-  slide_plans: Json;
-  slides: Json;
-};
-
 type LocalDatabase = {
   students: Student[];
   books: Book[];
@@ -162,7 +154,6 @@ type LocalDatabase = {
   q_reports: LocalQReport[];
   h_reports: LocalHReport[];
   y_reports: LocalYReport[];
-  briefing_kits: LocalBriefingKit[];
 };
 
 function defaultDb(): LocalDatabase {
@@ -173,7 +164,6 @@ function defaultDb(): LocalDatabase {
     q_reports: [],
     h_reports: [],
     y_reports: [],
-    briefing_kits: [],
   };
 }
 
@@ -400,9 +390,8 @@ function migrateLocalDatabase(raw: unknown): { db: LocalDatabase; didMigrate: bo
   didMigrate = didMigrate || qReportsDidMigrate;
   const h_reports = Array.isArray(o.h_reports) ? (o.h_reports as LocalHReport[]) : [];
   const y_reports = Array.isArray(o.y_reports) ? (o.y_reports as LocalYReport[]) : [];
-  const briefing_kits = Array.isArray(o.briefing_kits) ? (o.briefing_kits as LocalBriefingKit[]) : [];
 
-  const db: LocalDatabase = { students, books, m_reports, q_reports, h_reports, y_reports, briefing_kits };
+  const db: LocalDatabase = { students, books, m_reports, q_reports, h_reports, y_reports };
   return { db, didMigrate };
 }
 
@@ -492,6 +481,18 @@ function normalizeBookEntry(raw: unknown): { book: Book; legacy: boolean } {
   const created_at = typeof o.created_at === "string" ? (o.created_at as string) : new Date().toISOString();
   const cover_url =
     typeof o.cover_url === "string" ? ((o.cover_url as string).trim() || null) : null;
+  const registered_by_user_id =
+    typeof o.registered_by_user_id === "string"
+      ? (o.registered_by_user_id as string).trim() || LOCAL_DEV_USER_ID
+      : LOCAL_DEV_USER_ID;
+  const literature =
+    o.literature === 0 || o.literature === 1
+      ? o.literature
+      : o.literature === "0"
+        ? 0
+        : o.literature === "1"
+          ? 1
+          : null;
 
   return {
     book: {
@@ -507,6 +508,8 @@ function normalizeBookEntry(raw: unknown): { book: Book; legacy: boolean } {
       pub_cmt,
       ai_category,
       ai_keywords,
+      registered_by_user_id,
+      literature,
       created_at,
     },
     legacy: hadLegacyShape,
@@ -539,6 +542,8 @@ function upsertBook(db: LocalDatabase, row: Omit<Book, "id" | "created_at"> & { 
         Array.isArray(row.ai_keywords) && row.ai_keywords.length > 0
           ? row.ai_keywords
           : prev.ai_keywords,
+      literature: row.literature ?? prev.literature ?? null,
+      registered_by_user_id: prev.registered_by_user_id ?? row.registered_by_user_id ?? LOCAL_DEV_USER_ID,
     };
     return prev.id;
   }
@@ -557,6 +562,8 @@ function upsertBook(db: LocalDatabase, row: Omit<Book, "id" | "created_at"> & { 
     pub_cmt: row.pub_cmt ?? null,
     ai_category: row.ai_category ?? null,
     ai_keywords: row.ai_keywords ?? [],
+    literature: row.literature ?? null,
+    registered_by_user_id: row.registered_by_user_id ?? LOCAL_DEV_USER_ID,
     created_at: now,
   });
   return id;
@@ -841,42 +848,6 @@ export function localDbDevPlugin(): Plugin {
               const saved = db.books.find((b) => b.id === id);
               saveDb(root, db);
               sendJson(res, 200, { id, row: saved });
-              return;
-            }
-
-            if (req.method === "GET" && url === "/api/local/briefing-kits") {
-              const db = loadDb(root);
-              if (!db.briefing_kits) db.briefing_kits = [];
-              const list = [...db.briefing_kits].sort(
-                (x, y) => new Date(y.created_at).getTime() - new Date(x.created_at).getTime(),
-              );
-              sendJson(res, 200, list);
-              return;
-            }
-
-            if (req.method === "POST" && url === "/api/local/briefing-kits") {
-              const raw = await readBody(req);
-              const body = JSON.parse(raw || "{}") as LocalBriefingKit;
-              if (!body.id || !body.title) {
-                sendJson(res, 400, { error: "id와 title이 필요합니다." });
-                return;
-              }
-              const db = loadDb(root);
-              if (!db.briefing_kits) db.briefing_kits = [];
-              const idx = db.briefing_kits.findIndex((k) => k.id === body.id);
-              const row: LocalBriefingKit = {
-                id: body.id,
-                title: body.title,
-                created_at: body.created_at || new Date().toISOString(),
-                reference_text: body.reference_text ?? "",
-                meta: body.meta ?? {},
-                slide_plans: body.slide_plans ?? [],
-                slides: body.slides ?? [],
-              };
-              if (idx >= 0) db.briefing_kits[idx] = row;
-              else db.briefing_kits.unshift(row);
-              saveDb(root, db);
-              sendJson(res, 201, row);
               return;
             }
 

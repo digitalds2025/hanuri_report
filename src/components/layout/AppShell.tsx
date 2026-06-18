@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { Link, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "../../auth/AuthContext";
 import { isSupabaseConfigured } from "../../lib/supabaseClient";
 import { studentsSectionTitle } from "../../lib/studentsSectionTitle";
@@ -9,14 +9,11 @@ export function AppShell() {
   const configured = isSupabaseConfigured();
   const { user, requiresAuth, logout } = useAuth();
   const navigate = useNavigate();
-  const location = useLocation();
-  const fullWidthMain = location.pathname.startsWith("/briefing-material");
 
   const nav = useMemo(
     () => [
       { to: "/students", label: studentsSectionTitle(user?.login_id) },
       { to: "/books", label: "도서" },
-      { to: "/briefing-material", label: "자료집 생성" },
     ],
     [user?.login_id],
   );
@@ -106,13 +103,7 @@ export function AppShell() {
         </div>
       ) : null}
 
-      <main
-        className={
-          fullWidthMain
-            ? "w-full flex-1"
-            : "mx-auto w-full max-w-6xl flex-1 px-4 py-6"
-        }
-      >
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
         <Outlet />
       </main>
 

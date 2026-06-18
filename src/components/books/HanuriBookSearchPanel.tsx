@@ -76,6 +76,12 @@ type HanuriBookSearchPanelProps = {
   showPickHint?: boolean;
   /** YES24 수집 직후 (도서관: 폼 자동 채움) */
   onYes24Success?: (hit: BookSearchHit) => void;
+  /** digitalds만 — YES24 수동 등록 UI */
+  allowManualRegister?: boolean;
+  /** teacher 등 — digitalds가 등록한 도서만 검색 */
+  catalogOwnerUserId?: string | null;
+  /** YES24 등록 시 books.registered_by_user_id */
+  registerAsUserId?: string | null;
   className?: string;
 };
 
@@ -86,6 +92,9 @@ export function HanuriBookSearchPanel({
   resultClickDisabledTitle,
   showPickHint = false,
   onYes24Success,
+  allowManualRegister = false,
+  catalogOwnerUserId = null,
+  registerAsUserId = null,
   className = "",
 }: HanuriBookSearchPanelProps) {
   const [bookSearchTitle, setBookSearchTitle] = useState("");
@@ -134,10 +143,14 @@ export function HanuriBookSearchPanel({
     try {
       let rows: BookSearchHit[];
       if (isSupabaseConfigured() && supabase) {
-        const books = await searchBooksByQuery(title);
+        const books = await searchBooksByQuery(title, 30, {
+          registeredByUserId: catalogOwnerUserId,
+        });
         rows = books.map(bookToSearchHit);
       } else if (import.meta.env.DEV) {
-        const books = await searchBooksByQuery(title);
+        const books = await searchBooksByQuery(title, 30, {
+          registeredByUserId: catalogOwnerUserId,
+        });
         rows = books.map(bookToSearchHit);
       } else {
         rows = searchMockBooksByTitle(title).map(mockBookToSearchHit);
@@ -192,7 +205,7 @@ export function HanuriBookSearchPanel({
           },
         },
       );
-      const persisted = await persistBookUpsertRow(bookUpsertInputFromYes24(r));
+      const persisted = await persistBookUpsertRow(bookUpsertInputFromYes24(r), registerAsUserId);
       const dbBookId = persisted.ok ? persisted.book_id : null;
       if (!persisted.ok) {
         setYes24Logs((prev) => [...prev, `도서함에 넣는 중에 잠깐 문제가 생겼어요. (${persisted.error})`]);
@@ -361,7 +374,7 @@ export function HanuriBookSearchPanel({
         </ul>
       )}
 
-      {bookSearchResults !== null ? (
+      {allowManualRegister && bookSearchResults !== null ? (
         <button
           type="button"
           className="text-sm font-medium text-indigo-700 underline decoration-indigo-300 underline-offset-2 hover:text-indigo-900 disabled:opacity-50"
@@ -372,7 +385,7 @@ export function HanuriBookSearchPanel({
         </button>
       ) : null}
 
-      {yes24ManualOpen ? (
+      {allowManualRegister && yes24ManualOpen ? (
         <div className="space-y-3 rounded-lg border border-amber-200 bg-amber-50/80 p-3 text-sm text-amber-950">
           <p className="text-slate-800">
             YES24에서 가져올 도서 정보를 입력한 뒤 <strong>도서 찾기</strong>를 눌러 주세요.

@@ -49,6 +49,8 @@ export interface Database {
           ai_category: string | null;
           ai_keywords: Json;
           cover_url: string | null;
+          registered_by_user_id: string | null;
+          literature: number | null;
           created_at: string;
         };
         Insert: {
@@ -64,6 +66,8 @@ export interface Database {
           ai_category?: string | null;
           ai_keywords?: Json;
           cover_url?: string | null;
+          registered_by_user_id?: string | null;
+          literature?: number | null;
           created_at?: string;
         };
         Update: {
@@ -79,6 +83,8 @@ export interface Database {
           ai_category?: string | null;
           ai_keywords?: Json;
           cover_url?: string | null;
+          registered_by_user_id?: string | null;
+          literature?: number | null;
           created_at?: string;
         };
         Relationships: [];
@@ -411,6 +417,10 @@ export interface Database {
           p_login_id: string;
           p_password: string;
         };
+        Returns: string | null;
+      };
+      get_catalog_owner_user_id: {
+        Args: Record<string, never>;
         Returns: string | null;
       };
     };
